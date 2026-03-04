@@ -1,0 +1,1372 @@
+import { Response } from 'express';
+import { validationResult } from 'express-validator';
+import { query, getClient } from '../config/database';
+import { AuthRequest } from '../middleware/auth';
+import { OrderStatus } from '../models/Order';
+import { sendOrderReadyNotification, sendOrderReceipt } from '../services/sms.service';
+import { sendOrderConfirmation } from '../services/whatsapp.service';
+import { sendOrderReady } from '../services/whatsapp.service';
+import { generateOrderReceiptPDF } from '../services/pdf.service';
+import { logCreate, logUpdate, logDelete } from '../utils/activityLogger';
+import fs from 'fs';
+
+export const getAllOrders = async (req: AuthRequest, res: Response) => {
+  try {
+    const { status, payment_status, customer_id, from_date, to_date, search, page = 1, limit = 15 } = req.query;
+    const userRole = req.user?.role;
+    
+    // Build WHERE clause
+    let whereClause = 'WHERE 1=1';
+    const values: any[] = [];
+    let paramCount = 1;
+    
+    // BUSINESS RULE: Only ADMIN can see cancelled orders
+    if (userRole !== 'ADMIN') {
+      whereClause += ` AND o.status != 'cancelled'`;
+    }
+    
+    // Search by order number, customer name, or phone
+    if (search) {
+      whereClause += ` AND (
+        o.order_number ILIKE $${paramCount} OR 
+        c.name ILIKE $${paramCount} OR 
+        c.phone ILIKE $${paramCount}
+      )`;
+      values.push(`%${search}%`);
+      paramCount++;
+    }
+    
+    if (status) {
+      whereClause += ` AND o.status = $${paramCount++}`;
+      values.push(status);
+    }
+    
+    if (payment_status) {
+      whereClause += ` AND o.payment_status = $${paramCount++}`;
+      values.push(payment_status);
+    }
+    
+    if (customer_id) {
+      whereClause += ` AND o.customer_id = $${paramCount++}`;
+      values.push(customer_id);
+    }
+    
+    if (from_date) {
+      whereClause += ` AND o.created_at >= $${paramCount++}`;
+      values.push(from_date);
+    }
+    
+    if (to_date) {
+      whereClause += ` AND o.created_at <= $${paramCount++}`;
+      values.push(to_date);
+    }
+    
+    // Get total count
+    const countSql = `
+      SELECT COUNT(*) 
+      FROM orders o
+      JOIN customers c ON o.customer_id = c.id
+      JOIN users u ON o.user_id = u.id
+      ${whereClause}
+    `;
+    const countResult = await query(countSql, values);
+    const total = parseInt(countResult.rows[0].count);
+    
+    // Get paginated orders
+    const offset = (Number(page) - 1) * Number(limit);
+    values.push(Number(limit));
+    values.push(offset);
+    
+    const sql = `
+      SELECT o.id, o.order_number, o.customer_id, o.user_id,
+        o.status as order_status,
+        o.payment_status, o.payment_method, o.subtotal, o.discount,
+        o.tax, o.total, o.notes, o.created_at, o.updated_at,
+        o.amount_paid, o.total_amount, o.balance, o.due_date, o.pickup_date,
+        o.transaction_reference, o.invoice_number,
+        o.discount_percentage, o.discount_amount, o.tax_rate, o.tax_amount,
+        c.name as customer_name, 
+        c.phone as customer_phone,
+        u.full_name as staff_name,
+        u.role as user_role,
+        u.status as staff_status,
+        (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
+      FROM orders o
+      JOIN customers c ON o.customer_id = c.id
+      JOIN users u ON o.user_id = u.id
+      ${whereClause}
+      ORDER BY o.created_at DESC
+      LIMIT $${paramCount++} OFFSET $${paramCount++}
+    `;
+    
+    const result = await query(sql, values);
+    
+    res.json({ 
+      orders: result.rows,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / Number(limit))
+    });
+  } catch (error) {
+    console.error('Get orders error:', error);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+};
+
+export const getOrderById = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    
+    // Get order with customer and staff info
+    const orderResult = await query(
+      `SELECT o.id, o.order_number, o.customer_id, o.user_id,
+        o.status as order_status,
+        o.payment_status, o.payment_method, o.subtotal, o.discount,
+        o.tax, o.total, o.notes, o.created_at, o.updated_at,
+        o.amount_paid, o.total_amount, o.balance, o.due_date, o.pickup_date,
+        o.transaction_reference, o.invoice_number,
+        o.discount_percentage, o.discount_amount, o.tax_rate, o.tax_amount,
+        c.name as customer_name, 
+        c.phone as customer_phone,
+        c.email as customer_email,
+        c.location as customer_location,
+        u.full_name as staff_name
+      FROM orders o
+      JOIN customers c ON o.customer_id = c.id
+      JOIN users u ON o.user_id = u.id
+      WHERE o.id = $1`,
+      [id]
+    );
+    
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    // Get order items
+    const itemsResult = await query(
+      `SELECT oi.*, p.name as item_name, p.category, p.item_id
+      FROM order_items oi
+      JOIN price_items p ON oi.price_item_id = p.id
+      WHERE oi.order_id = $1`,
+      [id]
+    );
+    
+    res.json({
+      order: orderResult.rows[0],
+      items: itemsResult.rows,
+    });
+  } catch (error) {
+    console.error('Get order error:', error);
+    res.status(500).json({ error: 'Failed to fetch order' });
+  }
+};
+
+export const createOrder = async (req: AuthRequest, res: Response) => {
+  const client = await getClient();
+  
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    
+    await client.query('BEGIN');
+    
+    const { 
+      customer_id, 
+      items, 
+      discount_percentage = 0,
+      bargain_amount = 0,
+      payment_status = 'UNPAID',
+      payment_method = 'CASH',
+      amount_paid = 0,
+      transaction_reference,
+      pickup_date, 
+      notes,
+      tax_rate: frontendTaxRate,
+      tax_amount: frontendTaxAmount
+    } = req.body;
+    
+    // ================================================================
+    // SECURITY: ALL FINANCIAL CALCULATIONS DONE ON BACKEND
+    // NEVER TRUST FRONTEND VALUES FOR MONEY
+    // ================================================================
+    
+    // 1. Calculate subtotal from order items (verify each item price from database)
+    let calculatedSubtotal = 0;
+    const validatedItems: any[] = [];
+    
+    for (const item of items) {
+      // Fetch actual price from database (prevent price manipulation)
+      const priceResult = await client.query(
+        `SELECT id, name, price, ironing_price, express_price,
+         discount_percentage, discount_start_date, discount_end_date,
+         CASE 
+           WHEN discount_percentage > 0 
+                AND discount_start_date <= NOW() 
+                AND discount_end_date >= NOW()
+           THEN ROUND(price * (1 - discount_percentage / 100))
+           ELSE price
+         END as effective_price,
+         CASE 
+           WHEN discount_percentage > 0 
+                AND discount_start_date <= NOW() 
+                AND discount_end_date >= NOW()
+           THEN ROUND(ironing_price * (1 - discount_percentage / 100))
+           ELSE ironing_price
+         END as effective_ironing_price,
+         CASE 
+           WHEN express_price IS NOT NULL THEN express_price
+           WHEN discount_percentage > 0 
+                AND discount_start_date <= NOW() 
+                AND discount_end_date >= NOW()
+           THEN ROUND(price * (1 - discount_percentage / 100)) * 2
+           ELSE price * 2
+         END as effective_express_price
+         FROM price_items 
+         WHERE id = $1`,
+        [item.price_item_id]
+      );
+      
+      if (priceResult.rows.length === 0) {
+        throw new Error(`Invalid price item ID: ${item.price_item_id}`);
+      }
+      
+      const priceItem = priceResult.rows[0];
+      const serviceType = item.service_type?.toUpperCase(); // Normalize to uppercase
+      
+      let actualUnitPrice = 0;
+      if (serviceType === 'WASH') {
+        actualUnitPrice = priceItem.effective_price; // Uses discounted price if applicable
+      } else if (serviceType === 'IRON') {
+        actualUnitPrice = priceItem.effective_ironing_price; // Uses discounted ironing price if applicable
+      } else if (serviceType === 'EXPRESS') {
+        // Uses: 1) Custom express_price if set, OR 2) Discounted price * 2 if discount active, OR 3) Regular price * 2
+        actualUnitPrice = priceItem.effective_express_price;
+      } else {
+        throw new Error(`Invalid service type: ${item.service_type}`);
+      }
+      
+      const itemTotal = item.quantity * actualUnitPrice;
+      calculatedSubtotal += itemTotal;
+      
+      validatedItems.push({
+        price_item_id: item.price_item_id,
+        service_type: item.service_type,
+        quantity: item.quantity,
+        unit_price: actualUnitPrice, // Use actual DB price, not frontend
+        total_price: itemTotal
+      });
+    }
+    
+    // 2. Validate and calculate discount
+    const discountPercentageValue = parseFloat(discount_percentage.toString()) || 0;
+    
+    // Validate discount percentage (max 50% to prevent abuse)
+    if (discountPercentageValue < 0 || discountPercentageValue > 50) {
+      throw new Error(`Invalid discount percentage: ${discountPercentageValue}. Must be between 0-50%`);
+    }
+    
+    const discount_amount = Math.round(calculatedSubtotal * (discountPercentageValue / 100));
+    
+    // 2.5. Validate bargain amount (role-based limit)
+    const bargainAmountValue = parseInt(bargain_amount.toString()) || 0;
+    
+    if (bargainAmountValue < 0) {
+      throw new Error('Bargain amount cannot be negative');
+    }
+    
+    // Fetch user's maximum bargain limit
+    const userResult = await client.query(
+      `SELECT max_bargain_amount FROM users WHERE id = $1`,
+      [req.user!.id]
+    );
+    
+    if (userResult.rows.length === 0) {
+      throw new Error('User not found');
+    }
+    
+    const maxBargainAmount = userResult.rows[0].max_bargain_amount;
+    
+    // Validate bargain amount doesn't exceed user's limit
+    if (bargainAmountValue > maxBargainAmount) {
+      const bargainDisplay = bargainAmountValue.toLocaleString('en-UG');
+      const maxDisplay = maxBargainAmount.toLocaleString('en-UG');
+      throw new Error(`Bargain amount (UGX ${bargainDisplay}) exceeds your maximum limit of UGX ${maxDisplay}`);
+    }
+    
+    // Validate bargain amount doesn't exceed order subtotal
+    if (bargainAmountValue > calculatedSubtotal) {
+      const bargainDisplay = bargainAmountValue.toLocaleString('en-UG');
+      const subtotalDisplay = calculatedSubtotal.toLocaleString('en-UG');
+      throw new Error(`Bargain amount (UGX ${bargainDisplay}) cannot exceed order subtotal (UGX ${subtotalDisplay})`);
+    }
+    
+    // 3. Calculate tax (check if VAT is enabled in settings OR if per-order VAT was applied)
+    let tax_amount = 0;
+    let tax_rate = 0;
+    
+    // Priority 1: Use frontend values if provided AND non-zero (per-order VAT checkbox was checked)
+    if (frontendTaxRate !== undefined && frontendTaxAmount !== undefined && parseFloat(frontendTaxRate.toString()) > 0) {
+      tax_rate = parseFloat(frontendTaxRate.toString());
+      tax_amount = parseInt(frontendTaxAmount.toString());
+      console.log(`✅ Using per-order VAT: ${tax_rate}% = UGX ${tax_amount}`);
+    } else {
+      // Priority 2: Check global VAT setting (backward compatible)
+      try {
+        const vatSettingResult = await client.query(
+          `SELECT setting_value FROM business_settings WHERE setting_key = 'vat_enabled'`
+        );
+        
+        if (vatSettingResult.rows.length > 0) {
+          const vatSetting = vatSettingResult.rows[0].setting_value;
+          
+          // Only calculate tax if VAT is enabled
+          if (vatSetting.enabled === true) {
+            tax_rate = parseFloat(vatSetting.rate || 18); // Default to 18% Uganda VAT
+            // Tax is calculated on subtotal AFTER discount and bargain (Uganda standard)
+            const amountAfterDiscountAndBargain = calculatedSubtotal - discount_amount - bargainAmountValue;
+            tax_amount = Math.round(amountAfterDiscountAndBargain * (tax_rate / 100));
+            console.log(`✅ Using global VAT setting: ${tax_rate}% = UGX ${tax_amount}`);
+          }
+        }
+      } catch (error) {
+        console.error('VAT setting fetch error:', error);
+        // Default to 0 if setting not found (backward compatible)
+        tax_amount = 0;
+        tax_rate = 0;
+      }
+    }
+    
+    // 4. Calculate final total
+    // Formula: subtotal - discount - bargain + tax
+    const total_amount = calculatedSubtotal - discount_amount - bargainAmountValue + tax_amount;
+    
+    // Use backend-calculated subtotal
+    const subtotal = calculatedSubtotal;
+    
+    // Generate order number (format: ORD20260001)
+    // Use MAX to avoid race conditions and handle deleted orders
+    const maxOrderResult = await client.query(
+      `SELECT COALESCE(MAX(CAST(SUBSTRING(order_number FROM 8) AS INTEGER)), 0) as max_number 
+       FROM orders 
+       WHERE order_number LIKE $1`,
+      [`ORD${new Date().getFullYear()}%`]
+    );
+    const nextNumber = parseInt(maxOrderResult.rows[0].max_number) + 1;
+    const year = new Date().getFullYear();
+    const order_number = `ORD${year}${String(nextNumber).padStart(4, '0')}`;
+    
+    // Calculate balance
+    const balance = total_amount - amount_paid;
+    
+    // Validate amount_paid doesn't exceed total_amount (prevents negative balance)
+    if (amount_paid > total_amount) {
+      const amountPaidDisplay = amount_paid.toLocaleString('en-UG', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      const totalDisplay = total_amount.toLocaleString('en-UG', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      throw new Error(`Payment amount (UGX ${amountPaidDisplay}) exceeds the order total (UGX ${totalDisplay}). Maximum payment allowed is UGX ${totalDisplay}.`);
+    }
+    
+    // Auto-set payment method to ON_ACCOUNT for unpaid orders (credit/pending)
+    let finalPaymentMethod = payment_method;
+    if (payment_status === 'UNPAID' && !payment_method) {
+      finalPaymentMethod = 'ON_ACCOUNT';
+      console.log('💳 Auto-set payment method to ON_ACCOUNT for unpaid order');
+    }
+    
+    // Generate invoice number
+    const invoiceMaxResult = await client.query(
+      `SELECT COALESCE(MAX(CAST(SUBSTRING(invoice_number FROM 10) AS INTEGER)), 0) as max_number 
+       FROM orders 
+       WHERE invoice_number LIKE $1`,
+      [`INV-${year}-%`]
+    );
+    const nextInvoiceNumber = parseInt(invoiceMaxResult.rows[0].max_number) + 1;
+    const invoice_number = `INV-${year}-${String(nextInvoiceNumber).padStart(6, '0')}`;
+    
+    // Create order
+    const orderResult = await client.query(
+      `INSERT INTO orders (
+        order_number, 
+        customer_id, 
+        user_id, 
+        subtotal, 
+        tax_rate,
+        tax_amount,
+        discount_percentage,
+        discount_amount,
+        bargain_amount,
+        total_amount, 
+        payment_status,
+        payment_method,
+        amount_paid,
+        balance,
+        status,
+        transaction_reference,
+        invoice_number,
+        notes
+      )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       RETURNING *`,
+      [
+        order_number, 
+        customer_id, 
+        req.user!.id, 
+        subtotal, 
+        tax_rate,
+        tax_amount,
+        discount_percentage,
+        discount_amount,
+        bargainAmountValue,
+        total_amount, 
+        payment_status,
+        finalPaymentMethod, // Use auto-set payment method for unpaid orders
+        amount_paid,
+        balance,
+        'pending', // Initial status (lowercase to match enum: pending, processing, ready, delivered, cancelled)
+        transaction_reference || null,
+        invoice_number,
+        notes
+        // NOTE: pickup_date is NULL initially, only set when status = DELIVERED
+      ]
+    );
+    
+    const orderId = orderResult.rows[0].id;
+    
+    // Create order items using VALIDATED data from backend
+    for (const item of validatedItems) {
+      await client.query(
+        `INSERT INTO order_items (
+          order_id, 
+          price_item_id, 
+          service_type, 
+          quantity, 
+          unit_price, 
+          total_price
+        )
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          orderId, 
+          item.price_item_id, 
+          item.service_type.toUpperCase(), 
+          item.quantity, 
+          item.unit_price,  // Backend-verified price from database
+          item.total_price  // Backend-calculated total
+        ]
+      );
+    }
+    
+    // Create payment transaction if order has payment (PAID or PARTIAL)
+    if (amount_paid > 0 && payment_status !== 'UNPAID' && finalPaymentMethod && finalPaymentMethod !== 'ON_ACCOUNT') {
+      await client.query(
+        `INSERT INTO payments (
+          order_id,
+          customer_id,
+          amount,
+          payment_method,
+          transaction_reference,
+          payment_date,
+          notes,
+          created_by
+        ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, $7)`,
+        [
+          orderId,
+          customer_id,
+          amount_paid,
+          finalPaymentMethod,
+          transaction_reference || null,
+          `Initial payment for order ${order_number}`,
+          req.user!.id
+        ]
+      );
+      console.log(`💰 Payment transaction created: ${finalPaymentMethod} - UGX ${amount_paid.toLocaleString()}`);
+    }
+    
+    await client.query('COMMIT');
+    
+    const createdOrder = orderResult.rows[0];
+    
+    // 💰 Notify admin if bargain deduction was used
+    if (bargainAmountValue > 0) {
+      try {
+        // Get all admin users
+        const admins = await client.query(
+          `SELECT id FROM users WHERE role = 'ADMIN'`
+        );
+
+        // Get staff name who created the order
+        const staffName = req.user!.full_name || req.user!.email;
+        
+        // Create notification for each admin
+        for (const admin of admins.rows) {
+          await client.query(
+            `INSERT INTO notifications (user_id, type, title, message, link, created_at)
+             VALUES ($1, $2, $3, $4, $5, NOW())`,
+            [
+              admin.id,
+              'bargain_used',
+              'Bargain Deduction Applied',
+              `${staffName} applied a UGX ${bargainAmountValue.toLocaleString()} bargain deduction on order ${order_number}`,
+              `/orders?order=${order_number}`,
+            ]
+          );
+        }
+        
+        console.log(`🔔 Admin notified: ${staffName} used UGX ${bargainAmountValue.toLocaleString()} bargain on order ${order_number}`);
+      } catch (notifError) {
+        // Don't fail the order if notification fails
+        console.error('⚠️ Failed to create bargain notification:', notifError);
+      }
+    }
+    
+    // Get customer details for SMS receipt
+    const customerResult = await client.query(
+      'SELECT name, phone FROM customers WHERE id = $1',
+      [customer_id]
+    );
+    
+    if (customerResult.rows.length > 0 && customerResult.rows[0].phone) {
+      const customerName = customerResult.rows[0].name;
+      const customerPhone = customerResult.rows[0].phone;
+      
+      // Get item details with names from price_items table FIRST
+      const itemDetails = await Promise.all(
+        items.map(async (item: any) => {
+          const priceItemResult = await client.query(
+            'SELECT name FROM price_items WHERE id = $1',
+            [item.price_item_id]
+          );
+          return {
+            name: priceItemResult.rows[0]?.name || 'Item',
+            quantity: item.quantity,
+            price: item.total_price || item.unit_price || 0,
+          };
+        })
+      );
+      
+      // Prepare order details for receipt with proper item names
+      const orderDetails = {
+        items: itemDetails,
+        subtotal: total_amount,
+        total: total_amount,
+        amountPaid: amount_paid || 0,
+        balance: (total_amount - (amount_paid || 0)),
+        pickupDate: pickup_date ? new Date(pickup_date).toLocaleDateString() : 'TBD'
+      };
+      
+      // 🔥 Check automation setting before sending WhatsApp order confirmation
+      const automationCheck = await query(
+        `SELECT setting_value FROM automation_settings WHERE setting_key = 'whatsapp_auto_send_receipt'`
+      );
+      const autoSendReceipt = automationCheck.rows[0]?.setting_value ?? true;
+      
+      if (autoSendReceipt) {
+        const customerId = customer_id; // Store before client is released
+        sendOrderConfirmation(customerName, customerPhone, order_number, orderDetails)
+          .then(async (result) => {
+            if (result.success) {
+              console.log(`✅ WhatsApp confirmation sent for order ${order_number}`);
+              
+              // Save message to database (use standalone query, not client)
+              try {
+                await query(
+                  `INSERT INTO whatsapp_messages 
+                   (customer_id, phone_number, message_text, message_type, status, whatsapp_message_id, cost_ugx)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                  [
+                    customerId,
+                    customerPhone,
+                    `Order confirmation for ${order_number}`,
+                    'order_confirmation',
+                    'sent',
+                    result.messageId,
+                    193.00
+                  ]
+                );
+                console.log(`✅ Message logged to database for order ${order_number}`);
+              } catch (dbError) {
+                console.error(`❌ Database error logging message:`, dbError);
+              }
+            } else {
+              console.error(`❌ WhatsApp failed for order ${order_number}:`, result.error);
+            }
+          })
+          .catch((error) => {
+            console.error(`❌ WhatsApp error for order ${order_number}:`, error);
+          });
+      } else {
+        console.log(`ℹ️ Automation disabled - WhatsApp confirmation NOT sent for order ${order_number}`);
+      }
+      
+      // Get item details with names from price_items table
+      const itemDetailsForPDF = await Promise.all(
+        items.map(async (item: any) => {
+          const priceItemResult = await client.query(
+            'SELECT name FROM price_items WHERE id = $1',
+            [item.price_item_id]
+          );
+          return {
+            name: priceItemResult.rows[0]?.name || 'Item',
+            quantity: item.quantity,
+            price: item.subtotal,
+          };
+        })
+      );
+      
+      // Calculate pickup date (3 days from now)
+      const pickupDate = new Date();
+      pickupDate.setDate(pickupDate.getDate() + 3);
+      
+      // Generate PDF receipt asynchronously
+      console.log(`📄 Generating PDF receipt for ${order_number}`);
+      
+      generateOrderReceiptPDF({
+        orderNumber: order_number,
+        customerName,
+        customerPhone,
+        orderDate: new Date(),
+        pickupDate,
+        items: itemDetailsForPDF,
+        subtotal,
+        discount: discount_amount,
+        total: total_amount,
+        amountPaid: amount_paid,
+        balance,
+        paymentStatus: payment_status,
+      })
+        .then(async (pdfPath) => {
+          console.log(`✅ PDF receipt generated: ${pdfPath}`);
+          
+          // TODO: Upload PDF to public URL (ngrok, S3, or temp hosting)
+          // For now, send WhatsApp with PDF disabled (Twilio sandbox limitation)
+          const pdfUrl = undefined; // Set this when you have public PDF hosting
+          
+          // The WhatsApp confirmation was already sent above with receipt details
+          // This PDF is for future attachment capability
+          
+          // Send text receipt via SMS as backup
+          sendOrderReceipt(
+            customerPhone,
+            order_number,
+            customerName,
+            {
+              items: itemDetailsForPDF,
+              subtotal,
+              discount: discount_amount,
+              total: total_amount,
+              amountPaid: amount_paid,
+              balance,
+              paymentStatus: payment_status,
+            }
+          ).then((sent) => {
+            if (sent) {
+              console.log(`✅ SMS backup receipt sent for ${order_number}`);
+            }
+          }).catch((error) => {
+            console.error(`❌ SMS receipt failed:`, error);
+          });
+          
+          // Clean up PDF file after delay
+          setTimeout(() => {
+            try {
+              fs.unlinkSync(pdfPath);
+              console.log(`🗑️ Cleaned up PDF: ${pdfPath}`);
+            } catch (err) {
+              console.error(`⚠️ Failed to delete PDF: ${err}`);
+            }
+          }, 30000);
+        })
+        .catch((error) => {
+          console.error(`❌ Failed to generate/send receipt for ${order_number}:`, error);
+        });
+    }
+
+    // Create payment notification for mobile money or bank transfer
+    if ((payment_method.includes('MOBILE_MONEY') || payment_method === 'BANK_TRANSFER') && amount_paid > 0) {
+      const paymentMethodDisplay = payment_method.includes('MTN') ? 'MTN Mobile Money' :
+                                   payment_method.includes('AIRTEL') ? 'Airtel Money' :
+                                   'Bank Transfer';
+
+      // Notify all admins and the cashier
+      const usersToNotify = await client.query(
+        `SELECT id FROM users WHERE role IN ('ADMIN', 'DESKTOP_AGENT')`
+      );
+
+      const notificationMessage = `Payment of UGX ${amount_paid.toLocaleString()} received via ${paymentMethodDisplay} for order ${order_number}${transaction_reference ? ` (Ref: ${transaction_reference})` : ''}`;
+
+      for (const user of usersToNotify.rows) {
+        await client.query(
+          `INSERT INTO notifications (user_id, type, title, message, link, created_at)
+           VALUES ($1, 'payment', 'Payment Received', $2, '/orders', NOW())`,
+          [user.id, notificationMessage]
+        );
+      }
+
+      console.log(`✅ Payment notifications sent for order ${order_number}`);
+    }
+    
+    // Log order creation for audit trail
+    await logCreate(
+      req.user!.id,
+      req.user!.email,
+      req.user!.full_name,
+      req.user!.role,
+      'order',
+      orderId,
+      { 
+        order_number,
+        customer_id,
+        total_amount,
+        items: validatedItems.length,
+        payment_status
+      },
+      req.ip
+    );
+    
+    res.status(201).json({
+      message: 'Order created successfully',
+      order: createdOrder,
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Create order error:', error);
+    res.status(500).json({ error: 'Failed to create order' });
+  } finally {
+    client.release();
+  }
+};
+
+export const updateOrder = async (req: AuthRequest, res: Response) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    
+    const { id } = req.params;
+    const { 
+      status: order_status, 
+      payment_status, 
+      payment_method, 
+      amount_paid, 
+      balance,
+      pickup_date, 
+      discount_percentage,
+      discount_amount,
+      notes,
+      transaction_reference
+    } = req.body;
+
+    // Parse numeric values properly (handle both integer and decimal inputs)
+    // Database columns: subtotal, discount, tax, total, amount_paid are DECIMAL
+    // Validate and cap values to prevent overflow
+    const MAX_DECIMAL_VALUE = 999999999.99; // Max for DECIMAL(10,2)
+    
+    const parseAndValidateAmount = (value: any, fieldName: string): number | undefined => {
+      if (value === undefined || value === null) return undefined;
+      const parsed = parseFloat(value);
+      if (isNaN(parsed)) {
+        throw new Error(`Invalid ${fieldName}: ${value}`);
+      }
+      if (parsed > MAX_DECIMAL_VALUE) {
+        throw new Error(`${fieldName} exceeds maximum allowed value (${MAX_DECIMAL_VALUE})`);
+      }
+      if (parsed < 0) {
+        throw new Error(`${fieldName} cannot be negative`);
+      }
+      return parsed;
+    };
+    
+    const parsedAmountPaid = parseAndValidateAmount(amount_paid, 'amount_paid');
+    const parsedBalance = parseAndValidateAmount(balance, 'balance');
+    const parsedDiscountAmount = parseAndValidateAmount(discount_amount, 'discount_amount');
+    const parsedDiscountPercentage = discount_percentage !== undefined ? parseFloat(discount_percentage) : undefined;
+
+    // Get the current order to check if payment amount changed
+    const currentOrderResult = await query('SELECT * FROM orders WHERE id = $1', [id]);
+    if (currentOrderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    const currentOrder = currentOrderResult.rows[0];
+    
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramCount = 1;
+    
+    if (order_status !== undefined) {
+      updates.push(`status = $${paramCount++}`);
+      values.push(order_status);
+    }
+    if (payment_status !== undefined) {
+      updates.push(`payment_status = $${paramCount++}`);
+      values.push(payment_status);
+    }
+    if (payment_method !== undefined) {
+      updates.push(`payment_method = $${paramCount++}`);
+      values.push(payment_method);
+    }
+    if (transaction_reference !== undefined) {
+      updates.push(`transaction_reference = $${paramCount++}`);
+      values.push(transaction_reference);
+    }
+    if (parsedAmountPaid !== undefined) {
+      updates.push(`amount_paid = $${paramCount++}`);
+      values.push(parsedAmountPaid);
+    }
+    if (parsedBalance !== undefined) {
+      updates.push(`balance = $${paramCount++}`);
+      values.push(parsedBalance);
+    }
+    if (pickup_date !== undefined) {
+      updates.push(`pickup_date = $${paramCount++}`);
+      values.push(pickup_date);
+    }
+    if (parsedDiscountPercentage !== undefined) {
+      updates.push(`discount_percentage = $${paramCount++}`);
+      values.push(parsedDiscountPercentage);
+    }
+    if (parsedDiscountAmount !== undefined) {
+      updates.push(`discount_amount = $${paramCount++}`);
+      values.push(parsedDiscountAmount);
+      
+      // CRITICAL: Recalculate total_amount when discount changes
+      // Formula: total = subtotal + tax - discount
+      const newTotal = currentOrder.subtotal + (currentOrder.tax_amount || 0) - discount_amount;
+      updates.push(`total_amount = $${paramCount++}`);
+      values.push(newTotal);
+      
+      // Recalculate balance = total - amount_paid
+      const currentAmountPaid = parsedAmountPaid !== undefined ? parsedAmountPaid : currentOrder.amount_paid;
+      const newBalance = newTotal - currentAmountPaid;
+      updates.push(`balance = $${paramCount++}`);
+      values.push(newBalance);
+    }
+    if (notes !== undefined) {
+      updates.push(`notes = $${paramCount++}`);
+      values.push(notes);
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+    
+    values.push(id);
+    
+    const result = await query(
+      `UPDATE orders SET ${updates.join(', ')}
+       WHERE id = $${paramCount}
+       RETURNING *`,
+      values
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const updatedOrder = result.rows[0];
+
+    // If payment was added (amount_paid increased), create a payment transaction record
+    if (parsedAmountPaid !== undefined && parsedAmountPaid > currentOrder.amount_paid) {
+      const paymentAmount = parsedAmountPaid - currentOrder.amount_paid;
+      const userId = req.user?.id;
+
+      try {
+        await query(`
+          INSERT INTO payments (
+            order_id,
+            customer_id,
+            amount,
+            payment_method,
+            transaction_reference,
+            payment_date,
+            notes,
+            created_by
+          ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, $7)
+        `, [
+          id,
+          updatedOrder.customer_id,
+          paymentAmount,
+          payment_method || currentOrder.payment_method || 'CASH',
+          transaction_reference || null,
+          notes ? `Manual payment: ${notes}` : 'Manual payment added to order',
+          userId
+        ]);
+
+        console.log(`✅ Payment transaction record created: ${paymentAmount} for order ${id}`);
+      } catch (paymentError) {
+        console.error('Error creating payment record:', paymentError);
+        // Don't fail the order update if payment record fails
+      }
+    }
+    
+    // Log order update for audit trail
+    await logUpdate(
+      req.user!.id,
+      req.user!.email,
+      req.user!.full_name,
+      req.user!.role,
+      'order',
+      parseInt(id),
+      { 
+        status: order_status,
+        payment_status,
+        amount_paid: amount_paid || currentOrder.amount_paid,
+        balance: balance || updatedOrder.balance,
+        updated_fields: Object.keys(req.body)
+      },
+      req.ip
+    );
+    
+    res.json({
+      message: 'Order updated successfully',
+      order: updatedOrder,
+    });
+  } catch (error) {
+    console.error('Update order error:', error);
+    res.status(500).json({ error: 'Failed to update order' });
+  }
+};
+
+export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    // Get order details with customer info before updating
+    const orderBeforeUpdate = await query(
+      `SELECT o.*, c.name as customer_name, c.phone as customer_phone 
+       FROM orders o
+       JOIN customers c ON o.customer_id = c.id
+       WHERE o.id = $1`,
+      [id]
+    );
+    
+    if (orderBeforeUpdate.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const oldStatus = orderBeforeUpdate.rows[0].status;
+    const orderNumber = orderBeforeUpdate.rows[0].order_number;
+    const customerName = orderBeforeUpdate.rows[0].customer_name;
+    const customerPhone = orderBeforeUpdate.rows[0].customer_phone;
+    
+    console.log(`🔄 Status Update: ${orderNumber} from ${oldStatus} to ${status}`);
+    console.log(`📞 Customer: ${customerName}, Phone: ${customerPhone}`);
+    
+    // Convert status to lowercase to match database enum (pending, processing, ready, delivered, cancelled)
+    const dbStatus = status.toLowerCase();
+    
+    // BUSINESS RULE: Only ADMIN can cancel orders
+    if (dbStatus === 'cancelled' && req.user?.role !== 'ADMIN') {
+      return res.status(403).json({ 
+        error: 'Only administrators can cancel orders',
+        businessRule: 'CANCELLATION_RESTRICTED',
+        requiredRole: 'ADMIN',
+        yourRole: req.user?.role
+      });
+    }
+    
+    // Auto-update pickup_date when status changes to DELIVERED
+    let updateQuery = 'UPDATE orders SET status = $1';
+    const updateValues: any[] = [dbStatus];
+    let paramCount = 2;
+    
+    if (dbStatus === 'delivered' && oldStatus !== 'delivered') {
+      updateQuery += `, pickup_date = CURRENT_TIMESTAMP`;
+      console.log(`📅 Auto-updating pickup_date to current timestamp for DELIVERED order`);
+    }
+    
+    updateQuery += ` WHERE id = $${paramCount} RETURNING *`;
+    updateValues.push(id);
+    
+    // Update order status
+    const result = await query(updateQuery, updateValues);
+    
+    // Send SMS notification if status changed to READY
+    if (oldStatus !== 'ready' && dbStatus === 'ready' && customerPhone) {
+      console.log(`📱 Sending notifications for order ${orderNumber} to ${customerPhone}`);
+      
+      // Get order total and payment details
+      const totalAmount = orderBeforeUpdate.rows[0].total_amount;
+      const amountPaid = orderBeforeUpdate.rows[0].amount_paid || 0;
+      const balance = totalAmount - amountPaid;
+      const orderDate = new Date(orderBeforeUpdate.rows[0].created_at).toLocaleDateString();
+      
+      // Get order items for WhatsApp message
+      const orderItems = await query(
+        `SELECT oi.quantity, pi.name as item_name
+         FROM order_items oi
+         JOIN price_items pi ON oi.price_item_id = pi.id
+         WHERE oi.order_id = $1`,
+        [id]
+      );
+      
+      const items = orderItems.rows.map((item: any) => ({
+        name: item.item_name,
+        quantity: item.quantity
+      }));
+      
+      // Send SMS notification
+      sendOrderReadyNotification(customerPhone, orderNumber, customerName)
+        .then((sent) => {
+          if (sent) {
+            console.log(`✅ SMS notification sent for order ${orderNumber}`);
+          } else {
+            console.log(`ℹ️ SMS notification skipped for order ${orderNumber} (SMS disabled or failed)`);
+          }
+        })
+        .catch((error) => {
+          console.error(`❌ Failed to send SMS for order ${orderNumber}:`, error);
+        });
+      
+      // Check automation setting before sending WhatsApp ready notification
+      const automationCheck = await query(
+        `SELECT setting_value FROM automation_settings WHERE setting_key = 'whatsapp_auto_send_ready'`
+      );
+      const autoSendReady = automationCheck.rows[0]?.setting_value ?? true;
+      
+      if (autoSendReady) {
+        // Send WhatsApp ready notification with order details
+        sendOrderReady(
+          customerName,
+          customerPhone,
+          orderNumber,
+          {
+            items,
+            orderDate,
+            totalAmount,
+            amountPaid,
+            balance
+          }
+        )
+          .then(async (result) => {
+            if (result.success) {
+              console.log(`✅ WhatsApp ready notification sent for order ${orderNumber}`);
+              
+              // Save to database
+              try {
+                await query(
+                  `INSERT INTO whatsapp_messages 
+                   (customer_id, phone_number, message_text, message_type, status, whatsapp_message_id, cost_ugx)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                  [
+                    orderBeforeUpdate.rows[0].customer_id,
+                    customerPhone,
+                    `Order ready notification for ${orderNumber}`,
+                    'order_ready',
+                    'sent',
+                    result.messageId,
+                    193.00
+                  ]
+                );
+                console.log(`✅ WhatsApp message logged to database`);
+              } catch (dbError) {
+                console.error(`❌ Database error:`, dbError);
+              }
+            } else {
+              console.error(`❌ WhatsApp failed for order ${orderNumber}:`, result.error);
+            }
+          })
+          .catch((error) => {
+            console.error(`❌ WhatsApp error for order ${orderNumber}:`, error);
+          });
+      } else {
+        console.log(`ℹ️ Automation disabled - WhatsApp ready notification NOT sent for order ${orderNumber}`);
+      }
+    }
+    
+    res.json({
+      message: 'Order status updated successfully',
+      order: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Update order status error:', error);
+    res.status(500).json({ error: 'Failed to update order status' });
+  }
+};
+
+export const deleteOrder = async (req: AuthRequest, res: Response) => {
+  const client = await getClient();
+  
+  try {
+    const { id } = req.params;
+    const { deletion_reason } = req.body;
+    const userId = req.user?.id;
+    const userName = req.user?.full_name || 'Administrator';
+    
+    await client.query('BEGIN');
+    
+    // Get complete order details with customer info
+    const orderCheck = await client.query(
+      `SELECT o.*, c.name as customer_name 
+       FROM orders o
+       JOIN customers c ON o.customer_id = c.id
+       WHERE o.id = $1`,
+      [id]
+    );
+    
+    if (orderCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const order = orderCheck.rows[0];
+    
+    // BUSINESS RULE: Only ADMIN can delete, and ONLY if status is CANCELLED
+    if (order.status !== 'cancelled') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        error: `Cannot delete order #${order.order_number}. Only CANCELLED orders can be deleted.`,
+        currentStatus: order.status,
+        businessRule: 'DELETION_REQUIRES_CANCELLATION',
+        suggestion: 'First cancel the order, then delete it'
+      });
+    }
+    
+    // Get order items for audit trail
+    const orderItems = await client.query(
+      `SELECT oi.*, pi.name as item_name
+       FROM order_items oi
+       JOIN price_items pi ON oi.price_item_id = pi.id
+       WHERE oi.order_id = $1`,
+      [id]
+    );
+    
+    // Get payments for audit trail
+    const payments = await client.query(
+      `SELECT * FROM payments WHERE order_id = $1`,
+      [id]
+    );
+    
+    // Create audit record in order_deletions table
+    // CRITICAL: Convert money values to integers (never floats)
+    const totalAmount = parseInt(order.total_amount) || 0;
+    const amountPaid = parseInt(order.amount_paid) || 0;
+    const balance = totalAmount - amountPaid;
+    
+    await client.query(
+      `INSERT INTO order_deletions (
+        order_id, order_number, customer_id, customer_name,
+        total_amount, amount_paid, balance, payment_status, status,
+        created_at, cancelled_at, deleted_by, deleted_by_name,
+        deletion_reason, order_items, payments
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+      [
+        order.id,
+        order.order_number,
+        order.customer_id,
+        order.customer_name,
+        totalAmount,
+        amountPaid,
+        balance,
+        order.payment_status,
+        order.status,
+        order.created_at,
+        order.updated_at, // Approximation of when it was cancelled
+        userId,
+        userName,
+        deletion_reason || 'No reason provided',
+        JSON.stringify(orderItems.rows),
+        JSON.stringify(payments.rows)
+      ]
+    );
+    
+    console.log(`🗑️ Deleting order #${order.order_number}`);
+    console.log(`💰 Financial Impact: Total=${totalAmount}, Paid=${amountPaid}, Balance=${balance}`);
+    
+    // Delete order (cascade will handle order_items and payments)
+    await client.query('DELETE FROM orders WHERE id = $1', [id]);
+    
+    // Log the deletion for activity tracking
+    await logDelete(
+      userId!,
+      req.user?.email || 'unknown',
+      userName,
+      req.user?.role || 'ADMIN',
+      'orders',
+      parseInt(id),
+      {
+        order_number: order.order_number,
+        customer_name: order.customer_name,
+        total_amount: totalAmount,
+        amount_paid: amountPaid,
+        balance: balance,
+        deletion_reason
+      }
+    );
+    
+    await client.query('COMMIT');
+    
+    console.log(`✅ Order #${order.order_number} deleted and archived`);
+    
+    res.json({ 
+      message: `Order #${order.order_number} deleted successfully`,
+      archivedTo: 'order_deletions',
+      financialImpact: {
+        totalAmount: totalAmount,
+        amountPaid: amountPaid,
+        balance: balance
+      }
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Delete order error:', error);
+    res.status(500).json({ error: 'Failed to delete order' });
+  } finally {
+    client.release();
+  }
+};
+
+// Get order statistics for a specific year
+export const getOrderStats = async (req: AuthRequest, res: Response) => {
+  try {
+    const { year, status, payment_status } = req.query;
+    
+    if (!year) {
+      return res.status(400).json({ error: 'Year is required' });
+    }
+
+    const startDate = `${year}-01-01`;
+    const endDate = `${year}-12-31`;
+
+    const sql = `
+      SELECT 
+        COUNT(*) as count,
+        COALESCE(SUM(total_amount), 0) as total_amount
+      FROM orders
+      WHERE 
+        created_at >= $1 
+        AND created_at <= $2
+        AND status = $3
+        AND payment_status = $4
+    `;
+
+    const result = await query(sql, [startDate, endDate, status || 'DELIVERED', payment_status || 'PAID']);
+
+    res.json({
+      count: parseInt(result.rows[0].count),
+      totalAmount: parseFloat(result.rows[0].total_amount)
+    });
+  } catch (error) {
+    console.error('Get order stats error:', error);
+    res.status(500).json({ error: 'Failed to get order statistics' });
+  }
+};
+
+// Bulk delete old orders (admin only - PAID and DELIVERED only)
+export const bulkDeleteOrders = async (req: AuthRequest, res: Response) => {
+  const client = await getClient();
+  
+  try {
+    const { year } = req.body;
+    
+    if (!year) {
+      return res.status(400).json({ error: 'Year is required' });
+    }
+
+    const startDate = `${year}-01-01`;
+    const endDate = `${year}-12-31`;
+
+    await client.query('BEGIN');
+
+    // Only delete PAID and DELIVERED orders
+    const deleteSql = `
+      DELETE FROM orders
+      WHERE 
+        created_at >= $1 
+        AND created_at <= $2
+        AND status = 'DELIVERED'
+        AND payment_status = 'PAID'
+      RETURNING id
+    `;
+
+    const result = await client.query(deleteSql, [startDate, endDate]);
+    const deletedCount = result.rowCount || 0;
+
+    // Note: order_items will be automatically deleted via CASCADE foreign key
+
+    await client.query('COMMIT');
+
+    res.json({ 
+      message: `Successfully deleted ${deletedCount} completed orders`,
+      count: deletedCount
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Bulk delete orders error:', error);
+    res.status(500).json({ error: 'Failed to delete orders' });
+  } finally {
+    client.release();
+  }
+};
+
+// Get deleted orders audit log (ADMIN only)
+export const getDeletedOrders = async (req: AuthRequest, res: Response) => {
+  try {
+    const { page = 1, limit = 20, from_date, to_date, customer_id } = req.query;
+    
+    let whereClause = 'WHERE 1=1';
+    const values: any[] = [];
+    let paramCount = 1;
+    
+    if (from_date) {
+      whereClause += ` AND deleted_at >= $${paramCount++}`;
+      values.push(from_date);
+    }
+    
+    if (to_date) {
+      whereClause += ` AND deleted_at <= $${paramCount++}`;
+      values.push(to_date);
+    }
+    
+    if (customer_id) {
+      whereClause += ` AND customer_id = $${paramCount++}`;
+      values.push(customer_id);
+    }
+    
+    // Get total count
+    const countResult = await query(
+      `SELECT COUNT(*) as total FROM order_deletions ${whereClause}`,
+      values
+    );
+    const totalCount = parseInt(countResult.rows[0].total);
+    
+    // Calculate pagination
+    const offset = (Number(page) - 1) * Number(limit);
+    values.push(Number(limit), offset);
+    
+    // Get deleted orders with pagination
+    const result = await query(
+      `SELECT 
+        od.*,
+        u.full_name as deleted_by_full_name,
+        u.email as deleted_by_email
+       FROM order_deletions od
+       LEFT JOIN users u ON od.deleted_by = u.id
+       ${whereClause}
+       ORDER BY od.deleted_at DESC
+       LIMIT $${paramCount++} OFFSET $${paramCount++}`,
+      values
+    );
+    
+    res.json({
+      deletedOrders: result.rows,
+      pagination: {
+        currentPage: Number(page),
+        totalPages: Math.ceil(totalCount / Number(limit)),
+        totalCount,
+        limit: Number(limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get deleted orders error:', error);
+    res.status(500).json({ error: 'Failed to get deleted orders' });
+  }
+};

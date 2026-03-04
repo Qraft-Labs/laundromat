@@ -1,0 +1,997 @@
+import { MainLayout } from '@/components/layout/MainLayout';
+import { API_BASE_URL } from '@/lib/api';
+import { formatUGX } from '@/lib/currency';
+import { Package, AlertTriangle, Plus, Search, Trash2, Edit, AlertCircle, Clock } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { useState, useEffect } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/hooks/use-toast';
+import axios from 'axios';
+
+interface InventoryItem {
+  id: number;
+  name: string;
+  category: string;
+  unit: string;
+  quantity_in_stock: number;
+  reorder_level: number;
+  unit_cost: number;
+  supplier: string;
+  last_restock_date: string;
+  max_stock_quantity?: number;
+  expected_duration_value?: number;
+  expected_duration_unit?: 'DAYS' | 'WEEKS' | 'MONTHS' | 'YEARS';
+  is_long_term?: boolean;
+  low_stock_threshold_percent?: number;
+}
+
+export default function Inventory() {
+  const { token } = useAuth();
+  const { toast } = useToast();
+  const [items, setItems] = useState<InventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const itemsPerPage = 20;
+  
+  // Restock dialog state
+  const [showRestockDialog, setShowRestockDialog] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [restockQuantity, setRestockQuantity] = useState('');
+  const [restockCost, setRestockCost] = useState('');
+  const [restockNotes, setRestockNotes] = useState('');
+  const [restocking, setRestocking] = useState(false);
+  
+  // Add/Edit item dialog state
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemCategory, setNewItemCategory] = useState('');
+  const [newItemUnit, setNewItemUnit] = useState('');
+  const [newItemStock, setNewItemStock] = useState('0');
+  const [newItemReorder, setNewItemReorder] = useState('');
+  const [newItemCost, setNewItemCost] = useState('');
+  const [newItemSupplier, setNewItemSupplier] = useState('');
+  const [newItemNotes, setNewItemNotes] = useState('');
+  const [newItemDurationValue, setNewItemDurationValue] = useState('');
+  const [newItemDurationUnit, setNewItemDurationUnit] = useState<'DAYS' | 'WEEKS' | 'MONTHS' | 'YEARS'>('MONTHS');
+  const [newItemIsLongTerm, setNewItemIsLongTerm] = useState(false);
+  const [newItemMaxStock, setNewItemMaxStock] = useState('');
+  const [newItemThresholdPercent, setNewItemThresholdPercent] = useState('20');
+  const [adding, setAdding] = useState(false);
+
+  // Delete dialog state
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<InventoryItem | null>(null);
+  const [deleteConfirmStep, setDeleteConfirmStep] = useState(1);
+
+  useEffect(() => {
+    fetchInventory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const fetchInventory = async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get(`${API_BASE_URL}/inventory`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setItems(response.data.items || []);
+    } catch (error) {
+      console.error('Failed to fetch inventory:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Failed to load inventory',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRestock = async () => {
+    if (!selectedItem || !restockQuantity) return;
+
+    try {
+      setRestocking(true);
+      await axios.post(
+        `${API_BASE_URL}/inventory/restock`,
+        {
+          item_id: selectedItem.id,
+          quantity: parseFloat(restockQuantity),
+          unit_cost: restockCost ? parseFloat(restockCost) : selectedItem.unit_cost,
+          notes: restockNotes,
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      toast({
+        title: 'Stock Added',
+        description: `${restockQuantity} ${selectedItem.unit} added to ${selectedItem.name}`,
+      });
+
+      setShowRestockDialog(false);
+      setRestockQuantity('');
+      setRestockCost('');
+      setRestockNotes('');
+      setSelectedItem(null);
+      fetchInventory();
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Failed to add stock',
+      });
+    } finally {
+      setRestocking(false);
+    }
+  };
+
+  const openRestockDialog = (item: InventoryItem) => {
+    setSelectedItem(item);
+    setRestockCost(item.unit_cost.toString());
+    setShowRestockDialog(true);
+  };
+
+  const openEditDialog = (item: InventoryItem) => {
+    setIsEditing(true);
+    setEditingItemId(item.id);
+    setNewItemName(item.name);
+    setNewItemCategory(item.category);
+    setNewItemUnit(item.unit);
+    setNewItemStock(item.quantity_in_stock.toString());
+    setNewItemReorder(item.reorder_level.toString());
+    setNewItemCost(item.unit_cost.toString());
+    setNewItemSupplier(item.supplier || '');
+    setNewItemNotes('');
+    setNewItemMaxStock(item.max_stock_quantity?.toString() || '');
+    setNewItemDurationValue(item.expected_duration_value?.toString() || '');
+    setNewItemDurationUnit(item.expected_duration_unit || 'MONTHS');
+    setNewItemIsLongTerm(item.is_long_term || false);
+    setNewItemThresholdPercent(item.low_stock_threshold_percent?.toString() || '20');
+    setShowAddDialog(true);
+  };
+
+  const openAddDialog = () => {
+    setIsEditing(false);
+    setEditingItemId(null);
+    resetAddForm();
+    setShowAddDialog(true);
+  };
+
+  const handleAddItem = async () => {
+    if (!newItemName || !newItemCategory || !newItemUnit || !newItemReorder || !newItemCost) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Please fill in all required fields',
+      });
+      return;
+    }
+
+    try {
+      setAdding(true);
+      
+      const itemData = {
+        item_name: newItemName,
+        category: newItemCategory,
+        unit: newItemUnit,
+        quantity_in_stock: parseFloat(newItemStock),
+        reorder_level: parseFloat(newItemReorder),
+        unit_cost: parseFloat(newItemCost),
+        supplier: newItemSupplier,
+        notes: newItemNotes,
+        max_stock_quantity: newItemMaxStock ? parseFloat(newItemMaxStock) : null,
+        expected_duration_value: newItemDurationValue ? parseFloat(newItemDurationValue) : null,
+        expected_duration_unit: newItemDurationValue ? newItemDurationUnit : null,
+        is_long_term: newItemIsLongTerm,
+        low_stock_threshold_percent: parseFloat(newItemThresholdPercent),
+      };
+
+      if (isEditing && editingItemId) {
+        // Update existing item
+        await axios.put(
+          `${API_BASE_URL}/inventory/${editingItemId}`,
+          itemData,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        toast({
+          title: 'Item Updated',
+          description: `${newItemName} has been updated successfully`,
+        });
+      } else {
+        // Add new item
+        await axios.post(
+          `${API_BASE_URL}/inventory`,
+          itemData,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        toast({
+          title: 'Item Added',
+          description: `${newItemName} has been added to inventory`,
+        });
+      }
+
+      setShowAddDialog(false);
+      resetAddForm();
+      fetchInventory();
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: isEditing ? 'Failed to update item' : 'Failed to add item',
+      });
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleDeleteItem = (item: InventoryItem) => {
+    setItemToDelete(item);
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDeleteItem = async () => {
+    if (!itemToDelete) return;
+
+    try {
+      await axios.delete(`${API_BASE_URL}/inventory/${itemToDelete.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      toast({
+        title: 'Item Deleted',
+        description: `${itemToDelete.name} has been removed from inventory`,
+      });
+
+      setShowDeleteDialog(false);
+      setDeleteConfirmStep(1);
+      setItemToDelete(null);
+      fetchInventory();
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Failed to delete item',
+      });
+    }
+  };
+
+  const resetAddForm = () => {
+    setNewItemName('');
+    setNewItemCategory('');
+    setNewItemUnit('');
+    setNewItemStock('0');
+    setNewItemReorder('');
+    setNewItemCost('');
+    setNewItemSupplier('');
+    setNewItemNotes('');
+    setNewItemMaxStock('');
+    setNewItemDurationValue('');
+    setNewItemDurationUnit('MONTHS');
+    setNewItemIsLongTerm(false);
+    setNewItemThresholdPercent('20');
+  };
+
+  const filteredItems = items.filter((item) =>
+    item.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    item.category?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // Pagination
+  const totalFiltered = filteredItems.length;
+  const paginatedItems = filteredItems.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  // Update total pages when filtered items change
+  useEffect(() => {
+    const pages = Math.ceil(totalFiltered / itemsPerPage);
+    setTotalPages(pages || 1);
+    setTotalItems(totalFiltered);
+    if (currentPage > pages && pages > 0) {
+      setCurrentPage(pages);
+    }
+  }, [totalFiltered, currentPage]);
+
+  // Calculate consumption rate and stock status
+  const calculateStockStatus = (item: InventoryItem): { 
+    daysRemaining: number | null; 
+    dailyConsumption: number | null;
+    lowStockThreshold: number;
+  } => {
+    // Calculate low stock threshold
+    let lowStockThreshold = item.reorder_level;
+    if (item.max_stock_quantity && item.low_stock_threshold_percent) {
+      lowStockThreshold = (item.max_stock_quantity * item.low_stock_threshold_percent) / 100;
+    }
+
+    // If no duration data, return quantity-based only
+    if (!item.max_stock_quantity || !item.expected_duration_value || !item.expected_duration_unit) {
+      return { daysRemaining: null, dailyConsumption: null, lowStockThreshold };
+    }
+
+    // Convert duration to days
+    let durationInDays = 0;
+    switch (item.expected_duration_unit) {
+      case 'DAYS':
+        durationInDays = item.expected_duration_value;
+        break;
+      case 'WEEKS':
+        durationInDays = item.expected_duration_value * 7;
+        break;
+      case 'MONTHS':
+        durationInDays = item.expected_duration_value * 30;
+        break;
+      case 'YEARS':
+        durationInDays = item.expected_duration_value * 365;
+        break;
+    }
+
+    // Calculate daily consumption rate (max stock / duration)
+    const dailyConsumption = item.max_stock_quantity / durationInDays;
+
+    // Calculate days remaining (current stock / daily consumption)
+    const daysRemaining = dailyConsumption > 0 ? item.quantity_in_stock / dailyConsumption : null;
+
+    return { daysRemaining, dailyConsumption, lowStockThreshold };
+  };
+
+  const isItemLowStock = (item: InventoryItem): boolean => {
+    // If marked as long-term, never show as low stock
+    if (item.is_long_term) {
+      return false;
+    }
+
+    const { lowStockThreshold } = calculateStockStatus(item);
+    
+    // Check if current stock is below threshold
+    return item.quantity_in_stock <= lowStockThreshold;
+  };
+
+  const lowStockItems = items.filter(item => isItemLowStock(item));
+  const totalValue = items.reduce((sum, item) => sum + (item.quantity_in_stock * item.unit_cost), 0);
+
+  const getCategoryColor = (category: string) => {
+    const colors: Record<string, string> = {
+      DETERGENT: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100',
+      CHEMICAL: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100',
+      PACKAGING: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100',
+      HANGER: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100',
+      ACCESSORY: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-100',
+      EQUIPMENT: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-100',
+    };
+    return colors[category] || 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-100';
+  };
+
+  return (
+    <MainLayout title="Inventory" subtitle="Track supplies and materials">
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total Items</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{items.length}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Low Stock</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-2">
+              <div className="text-2xl font-bold text-destructive">{lowStockItems.length}</div>
+              {lowStockItems.length > 0 && (
+                <AlertTriangle className="h-5 w-5 text-destructive" />
+              )}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total Value</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{formatUGX(totalValue)}</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Search Bar */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 mb-6">
+        <div className="relative flex-1 w-full">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search items by name or category..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-10"
+          />
+        </div>
+        <Button onClick={openAddDialog} className="w-full sm:w-auto">
+          <Plus className="h-4 w-4 mr-2" />
+          Add Item
+        </Button>
+      </div>
+
+      {/* Inventory Table */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Package className="h-5 w-5" />
+            Inventory Items
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="text-center py-8 text-muted-foreground">Loading...</div>
+          ) : paginatedItems.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              {filteredItems.length === 0 ? 'No items found' : 'No items on this page'}
+            </div>
+          ) : (
+            <>
+            <div className="overflow-x-auto">
+            <Table className="min-w-[900px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="whitespace-nowrap">Item Name</TableHead>
+                  <TableHead className="whitespace-nowrap">Category</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">In Stock</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Reorder Level</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Unit Cost</TableHead>
+                  <TableHead className="whitespace-nowrap">Supplier</TableHead>
+                  <TableHead className="whitespace-nowrap">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paginatedItems.map((item) => {
+                  const isLowStock = isItemLowStock(item);
+                  const { daysRemaining, dailyConsumption, lowStockThreshold } = calculateStockStatus(item);
+                  return (
+                    <TableRow key={item.id} className={isLowStock ? 'bg-destructive/5' : ''}>
+                      <TableCell className="font-medium">
+                        <div>
+                          {item.name}
+                          {item.is_long_term && (
+                            <Badge variant="outline" className="ml-2 text-xs">
+                              Long-Term
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={getCategoryColor(item.category)}>
+                          {item.category}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div>
+                          <span className={isLowStock ? 'text-destructive font-semibold' : ''}>
+                            {item.quantity_in_stock} {item.unit}
+                          </span>
+                          {daysRemaining !== null && dailyConsumption !== null && (
+                            <div className="text-xs text-muted-foreground mt-1">
+                              {daysRemaining > 0 ? (
+                                <>
+                                  <span className={isLowStock ? 'text-orange-600 font-medium' : ''}>
+                                    ~{Math.round(daysRemaining)} days left
+                                  </span>
+                                  <br />
+                                  <span className="text-xs">
+                                    ({dailyConsumption.toFixed(2)} {item.unit}/day)
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="text-destructive font-medium">Depleted</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right text-muted-foreground">
+                        {item.reorder_level} {item.unit}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {formatUGX(item.unit_cost)}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {item.supplier || '-'}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant={isLowStock ? "default" : "outline"}
+                            onClick={() => openRestockDialog(item)}
+                          >
+                            <Plus className="h-3 w-3 mr-1" />
+                            Restock
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openEditDialog(item)}
+                          >
+                            <Edit className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleDeleteItem(item)}
+                            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="text-sm text-muted-foreground">
+                  Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} items
+                </div>
+                <Pagination>
+                  <PaginationContent className="flex-wrap justify-center sm:justify-end">
+                    <PaginationItem>
+                      <PaginationPrevious 
+                        onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                        className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                      />
+                    </PaginationItem>
+                    {[...Array(Math.min(5, totalPages))].map((_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      return (
+                        <PaginationItem key={pageNum}>
+                          <PaginationLink
+                            onClick={() => setCurrentPage(pageNum)}
+                            isActive={currentPage === pageNum}
+                            className="cursor-pointer"
+                          >
+                            {pageNum}
+                          </PaginationLink>
+                        </PaginationItem>
+                      );
+                    })}
+                    <PaginationItem>
+                      <PaginationNext 
+                        onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                        className={currentPage === totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Restock Dialog */}
+      <Dialog open={showRestockDialog} onOpenChange={setShowRestockDialog}>
+        <DialogContent className="max-w-[95vw] sm:max-w-md p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle>Restock Item</DialogTitle>
+            <DialogDescription>
+              Add stock for {selectedItem?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Current Stock</Label>
+              <Input
+                value={`${selectedItem?.quantity_in_stock} ${selectedItem?.unit}`}
+                disabled
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Quantity to Add *</Label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder={`Enter quantity in ${selectedItem?.unit}`}
+                value={restockQuantity}
+                onChange={(e) => setRestockQuantity(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Unit Cost</Label>
+              <Input
+                type="number"
+                min="0"
+                placeholder="Cost per unit"
+                value={restockCost}
+                onChange={(e) => setRestockCost(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Notes (Optional)</Label>
+              <Textarea
+                placeholder="Any notes about this restock..."
+                value={restockNotes}
+                onChange={(e) => setRestockNotes(e.target.value)}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={() => setShowRestockDialog(false)} className="w-full sm:w-auto">
+              Cancel
+            </Button>
+            <Button onClick={handleRestock} disabled={restocking || !restockQuantity} className="w-full sm:w-auto">
+              {restocking ? 'Adding...' : 'Add Stock'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Item Dialog */}
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[96dvh] sm:max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle>{isEditing ? 'Edit Inventory Item' : 'Add New Inventory Item'}</DialogTitle>
+            <DialogDescription>
+              {isEditing ? 'Update the details of this inventory item' : 'Add a new item to your inventory'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Item Name *</Label>
+                <Input
+                  placeholder="e.g., Ariel Detergent"
+                  value={newItemName}
+                  onChange={(e) => setNewItemName(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Category *</Label>
+                <Select value={newItemCategory} onValueChange={setNewItemCategory}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="DETERGENT">Detergent</SelectItem>
+                    <SelectItem value="CHEMICAL">Chemical</SelectItem>
+                    <SelectItem value="PACKAGING">Packaging</SelectItem>
+                    <SelectItem value="HANGER">Hanger</SelectItem>
+                    <SelectItem value="ACCESSORY">Accessory</SelectItem>
+                    <SelectItem value="EQUIPMENT">Equipment</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>Unit *</Label>
+                <Select value={newItemUnit} onValueChange={setNewItemUnit}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select unit" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="kg">Kilograms (kg)</SelectItem>
+                    <SelectItem value="liters">Liters</SelectItem>
+                    <SelectItem value="pieces">Pieces</SelectItem>
+                    <SelectItem value="boxes">Boxes</SelectItem>
+                    <SelectItem value="rolls">Rolls</SelectItem>
+                    <SelectItem value="units">Units</SelectItem>
+                    <SelectItem value="sets">Sets</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Initial Stock</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0"
+                  value={newItemStock}
+                  onChange={(e) => setNewItemStock(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Reorder Level *</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Minimum stock level"
+                  value={newItemReorder}
+                  onChange={(e) => setNewItemReorder(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Unit Cost (UGX) *</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  placeholder="Cost per unit"
+                  value={newItemCost}
+                  onChange={(e) => setNewItemCost(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Supplier</Label>
+                <Input
+                  placeholder="e.g., Unilever Uganda"
+                  value={newItemSupplier}
+                  onChange={(e) => setNewItemSupplier(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Notes (Optional)</Label>
+              <Textarea
+                placeholder="Additional information about this item..."
+                value={newItemNotes}
+                onChange={(e) => setNewItemNotes(e.target.value)}
+                rows={3}
+              />
+            </div>
+
+            {/* Duration-Based Stock Tracking */}
+            <div className="border-t pt-4 mt-4">
+              <div className="flex items-center gap-2 mb-4">
+                <Clock className="h-5 w-5 text-primary" />
+                <h4 className="font-semibold">Smart Stock Tracking</h4>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="is-long-term"
+                    checked={newItemIsLongTerm}
+                    onCheckedChange={(checked) => setNewItemIsLongTerm(checked as boolean)}
+                  />
+                  <label
+                    htmlFor="is-long-term"
+                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                  >
+                    Mark as Long-Term Item (equipment/tools that don't deplete)
+                  </label>
+                </div>
+
+                {!newItemIsLongTerm && (
+                  <>
+                    <div className="bg-muted/50 p-4 rounded-lg space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        Set max stock and expected duration to calculate consumption rate and automatic alerts
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label>Maximum Stock Quantity *</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="e.g., 100"
+                            value={newItemMaxStock}
+                            onChange={(e) => setNewItemMaxStock(e.target.value)}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            The highest quantity you typically stock
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Low Stock Threshold (%)</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="100"
+                            placeholder="20"
+                            value={newItemThresholdPercent}
+                            onChange={(e) => setNewItemThresholdPercent(e.target.value)}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Alert when stock drops below this % of max
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label>Expected Duration (Max Stock Should Last)</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.5"
+                            placeholder="e.g., 3"
+                            value={newItemDurationValue}
+                            onChange={(e) => setNewItemDurationValue(e.target.value)}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            How long max stock should last
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Duration Unit</Label>
+                          <Select value={newItemDurationUnit} onValueChange={(value: 'DAYS' | 'WEEKS' | 'MONTHS' | 'YEARS') => setNewItemDurationUnit(value)}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="DAYS">Days</SelectItem>
+                              <SelectItem value="WEEKS">Weeks</SelectItem>
+                              <SelectItem value="MONTHS">Months</SelectItem>
+                              <SelectItem value="YEARS">Years</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      {newItemMaxStock && newItemDurationValue && (
+                        <div className="bg-primary/10 p-3 rounded border border-primary/20">
+                          <p className="text-sm font-medium mb-1">Automatic Calculation:</p>
+                          <ul className="text-xs space-y-1 text-muted-foreground">
+                            <li>• Daily consumption: {(parseFloat(newItemMaxStock) / (parseFloat(newItemDurationValue) * (newItemDurationUnit === 'DAYS' ? 1 : newItemDurationUnit === 'WEEKS' ? 7 : newItemDurationUnit === 'MONTHS' ? 30 : 365))).toFixed(2)} {newItemUnit || 'units'}/day</li>
+                            <li>• Low stock alert at: {((parseFloat(newItemMaxStock) * parseFloat(newItemThresholdPercent)) / 100).toFixed(2)} {newItemUnit || 'units'}</li>
+                            <li>• System will calculate days remaining based on current stock</li>
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={() => { setShowAddDialog(false); resetAddForm(); }} className="w-full sm:w-auto">
+              Cancel
+            </Button>
+            <Button onClick={handleAddItem} disabled={adding} className="w-full sm:w-auto">
+              {adding ? (isEditing ? 'Updating...' : 'Adding...') : (isEditing ? 'Update Item' : 'Add Item')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={showDeleteDialog} onOpenChange={(open) => {
+        setShowDeleteDialog(open);
+        if (!open) {
+          setDeleteConfirmStep(1);
+          setItemToDelete(null);
+        }
+      }}>
+        <DialogContent className="max-w-[95vw] sm:max-w-md p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle>Delete Inventory Item</DialogTitle>
+            <DialogDescription>
+              {deleteConfirmStep === 1 ? (
+                `Are you sure you want to delete "${itemToDelete?.name}"? This will deactivate the item.`
+              ) : (
+                "This is your final confirmation. The item will be soft-deleted (deactivated)."
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          
+          {deleteConfirmStep === 2 && itemToDelete && (
+            <div className="rounded-lg border-2 border-red-500 bg-red-50 dark:bg-red-950 p-4 mb-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5" />
+                <div>
+                  <h4 className="font-semibold text-red-900 dark:text-red-100 mb-2">⚠️ Final Warning</h4>
+                  <p className="text-sm text-red-800 dark:text-red-200 mb-2">
+                    You are about to deactivate:
+                  </p>
+                  <ul className="text-sm text-red-800 dark:text-red-200 list-disc list-inside space-y-1">
+                    <li>Item: <strong>{itemToDelete.name}</strong></li>
+                    <li>Category: {itemToDelete.category}</li>
+                    <li>Current Stock: {itemToDelete.quantity_in_stock} {itemToDelete.unit}</li>
+                  </ul>
+                  <p className="text-sm text-red-800 dark:text-red-200 mt-3 font-semibold">
+                    Note: This is a soft delete. Item can be restored later if needed.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            {deleteConfirmStep === 1 ? (
+              <>
+                <Button variant="outline" onClick={() => setShowDeleteDialog(false)} className="w-full sm:w-auto">
+                  Cancel
+                </Button>
+                <Button 
+                  variant="destructive" 
+                  onClick={() => setDeleteConfirmStep(2)}
+                  className="w-full sm:w-auto"
+                >
+                  Delete Item
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button 
+                  variant="outline" 
+                  onClick={() => setDeleteConfirmStep(1)}
+                  className="w-full sm:w-auto"
+                >
+                  Go Back
+                </Button>
+                <Button 
+                  variant="destructive" 
+                  onClick={confirmDeleteItem}
+                  className="bg-red-600 hover:bg-red-700 w-full sm:w-auto"
+                >
+                  Yes, Delete (Deactivate)
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </MainLayout>
+  );
+}

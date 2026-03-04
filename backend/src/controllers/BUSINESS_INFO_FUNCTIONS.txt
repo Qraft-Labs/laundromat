@@ -1,0 +1,57 @@
+
+export const getBusinessInfo = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT setting_value FROM business_settings WHERE setting_key = 'business_info'`
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({
+        name: 'Lush Dry Cleaners & Laundromat',
+        phone: '+256 754 723 614',
+        email: 'info@lushdrycleaners.ug',
+        location: 'Kampala, Uganda',
+        address: '',
+        tin: ''
+      });
+    }
+
+    res.json(result.rows[0].setting_value);
+  } catch (error) {
+    console.error('Get business info error:', error);
+    res.status(500).json({ error: 'Failed to fetch business info' });
+  }
+};
+
+export const updateBusinessInfo = async (req: AuthRequest, res: Response) => {
+  try {
+    const { name, phone, email, location, address, tin } = req.body;
+
+    if (!name || !phone) {
+      return res.status(400).json({ error: 'Business name and phone are required' });
+    }
+
+    const businessInfo = {
+      name,
+      phone,
+      email: email || '',
+      location: location || '',
+      address: address || '',
+      tin: tin || ''
+    };
+
+    const result = await query(
+      `INSERT INTO business_settings (setting_key, setting_value, updated_at)
+       VALUES ('business_info', $1, NOW())
+       ON CONFLICT (setting_key) 
+       DO UPDATE SET setting_value = $1, updated_at = NOW()
+       RETURNING setting_value`,
+      [JSON.stringify(businessInfo)]
+    );
+
+    res.json(result.rows[0].setting_value);
+  } catch (error) {
+    console.error('Update business info error:', error);
+    res.status(500).json({ error: 'Failed to update business info' });
+  }
+};

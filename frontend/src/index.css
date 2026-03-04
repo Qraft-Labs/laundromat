@@ -1,0 +1,236 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Lush Dry Cleaners ERP Design System */
+
+@layer base {
+  /* Smooth scroll behavior for entire app */
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  :root {
+    /* Brand Colors - Lush */
+    --background: 210 20% 98%;
+    --foreground: 222 47% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 15%;
+
+    /* Navy Blue - Primary */
+    --primary: 222 60% 25%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Lime Green - Secondary/Accent */
+    --secondary: 88 50% 45%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 210 20% 94%;
+    --muted-foreground: 215 16% 47%;
+
+    /* Cyan - Accent */
+    --accent: 187 85% 43%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Success Green */
+    --success: 142 70% 40%;
+    --success-foreground: 0 0% 100%;
+
+    /* Warning Orange */
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --border: 214 20% 88%;
+    --input: 214 20% 88%;
+    --ring: 222 60% 25%;
+
+    --radius: 0.625rem;
+
+    /* Sidebar - Navy themed */
+    --sidebar-background: 222 60% 20%;
+    --sidebar-foreground: 210 20% 95%;
+    --sidebar-primary: 88 50% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 55% 28%;
+    --sidebar-accent-foreground: 210 20% 95%;
+    --sidebar-border: 222 50% 30%;
+    --sidebar-ring: 187 85% 43%;
+
+    /* Custom tokens */
+    --gradient-brand: linear-gradient(135deg, hsl(222 60% 25%), hsl(222 60% 35%));
+    --gradient-accent: linear-gradient(135deg, hsl(88 50% 45%), hsl(88 60% 55%));
+    --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+    --shadow-elevated: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+    --shadow-glow: 0 0 20px hsl(88 50% 45% / 0.3);
+  }
+
+  .dark {
+    --background: 222 47% 8%;
+    --foreground: 210 20% 95%;
+
+    --card: 222 47% 12%;
+    --card-foreground: 210 20% 95%;
+
+    --popover: 222 47% 12%;
+    --popover-foreground: 210 20% 95%;
+
+    --primary: 88 50% 50%;
+    --primary-foreground: 222 47% 10%;
+
+    --secondary: 222 40% 25%;
+    --secondary-foreground: 210 20% 95%;
+
+    --muted: 222 40% 18%;
+    --muted-foreground: 215 20% 60%;
+
+    --accent: 187 85% 43%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 70% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --border: 222 40% 20%;
+    --input: 222 40% 20%;
+    --ring: 88 50% 50%;
+
+    --sidebar-background: 222 60% 10%;
+    --sidebar-foreground: 210 20% 90%;
+    --sidebar-primary: 88 50% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 55% 18%;
+    --sidebar-accent-foreground: 210 20% 90%;
+    --sidebar-border: 222 50% 20%;
+    --sidebar-ring: 187 85% 43%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: 'Poppins', system-ui, sans-serif;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer components {
+  .stat-card {
+    @apply bg-card rounded-xl p-6 border border-border shadow-sm transition-all duration-200;
+  }
+
+  .stat-card:hover {
+    @apply shadow-md border-secondary/30;
+  }
+
+  .nav-item {
+    @apply flex items-center gap-3 px-4 py-3 rounded-lg text-sidebar-foreground/80 transition-all duration-200;
+  }
+
+  .nav-item:hover {
+    @apply bg-sidebar-accent text-sidebar-foreground;
+  }
+
+  .nav-item.active {
+    @apply bg-sidebar-primary text-sidebar-primary-foreground font-medium;
+  }
+
+  .price-badge {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold;
+    background: linear-gradient(135deg, hsl(var(--secondary)) 0%, hsl(88 60% 50%) 100%);
+    color: hsl(var(--secondary-foreground));
+  }
+
+  .order-status {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .order-status.pending {
+    @apply bg-warning/15 text-warning;
+  }
+
+  .order-status.processing {
+    @apply bg-accent/15 text-accent;
+  }
+
+  .order-status.ready {
+    @apply bg-success/15 text-success;
+  }
+
+  .order-status.delivered {
+    @apply bg-primary/15 text-primary;
+  }
+
+  .order-status.cancelled {
+    @apply bg-destructive/15 text-destructive;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--accent)) 100%);
+  }
+
+  .bg-gradient-brand {
+    background: var(--gradient-brand);
+  }
+
+  .bg-gradient-accent {
+    background: var(--gradient-accent);
+  }
+
+  .shadow-glow {
+    box-shadow: var(--shadow-glow);
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-slide-in {
+    animation: slideIn 0.4s ease-out;
+  }
+
+  @keyframes slideIn {
+    from {
+      opacity: 0;
+      transform: translateX(-16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+}

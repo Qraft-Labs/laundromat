@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login Test - Lush Laundry</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        .info-box {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+        }
+        .info-box .label {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .info-box .value {
+            color: #666;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .result.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .result.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .log {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #ddd;
+        }
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Login Endpoint Test</h1>
+        <p class="subtitle">Test authentication directly from your phone</p>
+
+        <div class="info-box">
+            <div class="label">Current Page URL:</div>
+            <div class="value" id="currentUrl"></div>
+        </div>
+
+        <div class="info-box">
+            <div class="label">Backend API URL:</div>
+            <div class="value" id="apiUrl"></div>
+        </div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="email">Email:</label>
+                <input type="email" id="email" value="husseinibram555@gmail.com" required>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" placeholder="Enter password" required>
+            </div>
+
+            <button type="submit" id="submitBtn">Test Login</button>
+        </form>
+
+        <div id="result"></div>
+        <div id="logContainer"></div>
+    </div>
+
+    <script>
+        // Display current info
+        document.getElementById('currentUrl').textContent = window.location.href;
+        
+        // Backend URL (dynamically detect hotspot vs WiFi)
+        const hostname = window.location.hostname;
+        const backendUrl = `http://${hostname}:5000`;
+        const loginEndpoint = `${backendUrl}/api/auth/login`;
+        document.getElementById('apiUrl').textContent = loginEndpoint;
+
+        const logs = [];
+        
+        function addLog(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            logs.push(`[${timestamp}] ${message}`);
+            updateLogDisplay();
+        }
+
+        function updateLogDisplay() {
+            const logContainer = document.getElementById('logContainer');
+            if (logs.length > 0) {
+                logContainer.innerHTML = '<div class="log">' + 
+                    logs.map(log => `<div class="log-entry">${log}</div>`).join('') +
+                    '</div>';
+                // Scroll to bottom
+                logContainer.lastChild.scrollTop = logContainer.lastChild.scrollHeight;
+            }
+        }
+
+        function showResult(message, isError = false) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.className = `result ${isError ? 'error' : 'success'}`;
+            resultDiv.textContent = message;
+        }
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const submitBtn = document.getElementById('submitBtn');
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Testing...';
+            
+            logs.length = 0; // Clear logs
+            addLog('🔍 Starting login test...');
+            addLog(`📧 Email: ${email}`);
+            addLog(`🌐 Endpoint: ${loginEndpoint}`);
+            
+            try {
+                addLog('📡 Sending POST request...');
+                
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => {
+                    controller.abort();
+                    addLog('⏱️ Request timeout (10 seconds)');
+                }, 10000);
+                
+                const startTime = Date.now();
+                
+                const response = await fetch(loginEndpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password }),
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                const duration = Date.now() - startTime;
+                
+                addLog(`✅ Response received in ${duration}ms`);
+                addLog(`📊 Status: ${response.status} ${response.statusText}`);
+                addLog(`📋 Headers: ${JSON.stringify([...response.headers.entries()])}`);
+                
+                const data = await response.json();
+                addLog(`📦 Response data: ${JSON.stringify(data, null, 2)}`);
+                
+                if (response.ok) {
+                    showResult(`✅ Login successful! Token received: ${data.token?.substring(0, 20)}...`);
+                    addLog('🎉 Authentication successful!');
+                } else {
+                    showResult(`❌ Login failed: ${data.error || response.statusText}`, true);
+                    addLog(`❌ Error: ${data.error || 'Unknown error'}`);
+                }
+                
+            } catch (error) {
+                addLog(`❌ FETCH ERROR: ${error.name}`);
+                addLog(`❌ Error message: ${error.message}`);
+                
+                if (error.name === 'AbortError') {
+                    showResult('❌ Request timeout - Backend took too long to respond (>10s)', true);
+                    addLog('⚠️ This usually means backend is unreachable or firewall blocking');
+                } else if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+                    showResult('❌ Failed to fetch - Cannot connect to backend', true);
+                    addLog('⚠️ Possible causes:');
+                    addLog('   - Backend not running');
+                    addLog('   - Firewall blocking connection');
+                    addLog('   - Wrong IP address');
+                    addLog('   - CORS issue');
+                } else {
+                    showResult(`❌ Error: ${error.message}`, true);
+                }
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Test Login';
+            }
+        });
+
+        addLog('✅ Test page loaded');
+        addLog(`📱 User Agent: ${navigator.userAgent}`);
+    </script>
+</body>
+</html>

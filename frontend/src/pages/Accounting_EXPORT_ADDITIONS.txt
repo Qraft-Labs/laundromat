@@ -1,0 +1,143 @@
+// Add these functions after fetchTrialBalance() and before the return statement:
+
+  const toggleReportSelection = (report: string) => {
+    setSelectedReports(prev => 
+      prev.includes(report) 
+        ? prev.filter(r => r !== report)
+        : [...prev, report]
+    );
+  };
+
+  const getPeriodLabel = () => {
+    const labels: { [key: string]: string } = {
+      'today': 'Today',
+      'week': 'This Week', 
+      'month': 'This Month',
+      'year': 'This Year'
+    };
+    return labels[period] || period;
+  };
+
+  const handleExportPDF = () => {
+    if (selectedReports.length === 0) {
+      toast.error('Please select at least one report to export');
+      return;
+    }
+
+    setExporting(true);
+    
+    // Generate HTML report
+    let html = `<!DOCTYPE html><html><head>
+      <meta charset="UTF-8">
+      <title>Lush Laundry Financial Reports - ${getPeriodLabel()}</title>
+      <style>
+        body { font-family: Arial, sans-serif; padding: 40px; }
+        h1 { color: #2563eb; text-align: center; }
+        h2 { color: #1e40af; margin-top: 30px; border-bottom: 2px solid #93c5fd; padding-bottom: 8px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { padding: 10px; border-bottom: 1px solid #ddd; }
+        th { background: #f1f5f9; text-align: left; }
+        .amount { text-align: right; font-family: monospace; }
+        .positive { color: #16a34a; }
+        .negative { color: #dc2626; }
+        .total { font-weight: bold; background: #f8fafc; }
+        .page-break { page-break-after: always; }
+      </style>
+    </head><body>
+      <h1>LUSH LAUNDRY SERVICES</h1>
+      <p style="text-align:center">Financial Reports - ${getPeriodLabel()}<br/>Generated: ${new Date().toLocaleString()}</p>
+    `;
+
+    // Add selected reports
+    if (selectedReports.includes('income-statement') && incomeStatement) {
+      html += `<h2>Income Statement</h2><p>Period: ${incomeStatement.period}</p>
+        <h3>Revenue</h3><table>
+        ${incomeStatement.revenue.by_category.map((cat: any) => 
+          `<tr><td>${cat.category}</td><td class="amount">${formatUGX(cat.revenue)}</td></tr>`
+        ).join('')}
+        <tr class="total"><td>Total Revenue</td><td class="amount positive">${formatUGX(incomeStatement.revenue.total)}</td></tr>
+        </table>
+        <h3>Expenses</h3><table>
+        <tr><td>Cost of Goods Sold</td><td class="amount negative">(${formatUGX(incomeStatement.cost_of_goods_sold)})</td></tr>
+        ${incomeStatement.operating_expenses.by_category.map((exp: any) => 
+          `<tr><td>${exp.category}</td><td class="amount negative">(${formatUGX(exp.amount)})</td></tr>`
+        ).join('')}
+        <tr><td>Salaries</td><td class="amount negative">(${formatUGX(incomeStatement.salaries.total)})</td></tr>
+        </table>
+        <div class="total" style="padding:15px; margin:20px 0; background:#dbeafe;">
+          <h3>Net Profit: ${formatUGX(incomeStatement.net_profit)}</h3>
+          <p>Profit Margin: ${incomeStatement.profit_margin}%</p>
+        </div>
+        ${selectedReports.length > 1 ? '<div class="page-break"></div>' : ''}
+      `;
+    }
+
+    if (selectedReports.includes('balance-sheet') && balanceSheet) {
+      html += `<h2>Balance Sheet</h2><p>As of: ${balanceSheet.as_of_date}</p>
+        <h3>ASSETS</h3><table>
+        <tr><td>Cash</td><td class="amount">${formatUGX(balanceSheet.assets.current_assets.cash)}</td></tr>
+        <tr><td>Accounts Receivable</td><td class="amount">${formatUGX(balanceSheet.assets.current_assets.accounts_receivable)}</td></tr>
+        <tr><td>Inventory</td><td class="amount">${formatUGX(balanceSheet.assets.current_assets.inventory)}</td></tr>
+        <tr class="total"><td>Total Assets</td><td class="amount positive">${formatUGX(balanceSheet.assets.total_assets)}</td></tr>
+        </table>
+        <h3>LIABILITIES & EQUITY</h3><table>
+        <tr><td>Accounts Payable</td><td class="amount">${formatUGX(balanceSheet.liabilities.current_liabilities.accounts_payable)}</td></tr>
+        <tr><td>Accrued Salaries</td><td class="amount">${formatUGX(balanceSheet.liabilities.current_liabilities.accrued_salaries)}</td></tr>
+        <tr class="total"><td>Total Liabilities</td><td class="amount">${formatUGX(balanceSheet.liabilities.total_liabilities)}</td></tr>
+        <tr><td>Retained Earnings</td><td class="amount">${formatUGX(balanceSheet.equity.retained_earnings)}</td></tr>
+        <tr class="total"><td>Total Equity</td><td class="amount positive">${formatUGX(balanceSheet.equity.total_equity)}</td></tr>
+        </table>
+        ${selectedReports.length > 1 && selectedReports.indexOf('balance-sheet') < selectedReports.length - 1 ? '<div class="page-break"></div>' : ''}
+      `;
+    }
+
+    if (selectedReports.includes('cash-flow') && cashFlow) {
+      html += `<h2>Cash Flow Statement</h2><p>Period: ${cashFlow.period}</p>
+        <h3>Operating Activities</h3><table>
+        <tr><td>Cash from customers</td><td class="amount positive">${formatUGX(cashFlow.operating_activities.cash_from_customers)}</td></tr>
+        <tr><td>Cash paid for expenses</td><td class="amount negative">(${formatUGX(cashFlow.operating_activities.cash_paid_for_expenses)})</td></tr>
+        <tr><td>Cash paid for salaries</td><td class="amount negative">(${formatUGX(cashFlow.operating_activities.cash_paid_for_salaries)})</td></tr>
+        <tr class="total"><td>Net Cash from Operations</td><td class="amount">${formatUGX(cashFlow.operating_activities.net_cash_from_operations)}</td></tr>
+        </table>
+        <div class="total" style="padding:15px; margin:20px 0; background:#dbeafe;">
+          <h3>Net Increase in Cash: ${formatUGX(cashFlow.net_increase_in_cash)}</h3>
+          <p>Cash at End: ${formatUGX(cashFlow.cash_at_end)}</p>
+        </div>
+        ${selectedReports.length > 1 && selectedReports.indexOf('cash-flow') < selectedReports.length - 1 ? '<div class="page-break"></div>' : ''}
+      `;
+    }
+
+    if (selectedReports.includes('trial-balance') && trialBalance) {
+      html += `<h2>Trial Balance</h2><p>As of: ${trialBalance.as_of_date}</p>
+        <table><thead><tr>
+          <th>Account Code</th><th>Account Name</th>
+          <th class="amount">Debit</th><th class="amount">Credit</th>
+        </tr></thead><tbody>
+        ${trialBalance.accounts.map((acc: any) => 
+          `<tr><td>${acc.account_code}</td><td>${acc.account_name}</td>
+          <td class="amount">${acc.debit > 0 ? formatUGX(acc.debit) : '-'}</td>
+          <td class="amount">${acc.credit > 0 ? formatUGX(acc.credit) : '-'}</td></tr>`
+        ).join('')}
+        <tr class="total"><td colspan="2">TOTAL</td>
+          <td class="amount">${formatUGX(trialBalance.totals.total_debits)}</td>
+          <td class="amount">${formatUGX(trialBalance.totals.total_credits)}</td>
+        </tr></tbody></table>
+      `;
+    }
+
+    html += '</body></html>';
+
+    // Open print dialog
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(html);
+      printWindow.document.close();
+      setTimeout(() => {
+        printWindow.print();
+        toast.success('Print dialog opened. Save as PDF from print options!');
+      }, 500);
+    }
+
+    setExporting(false);
+    setShowExportDialog(false);
+  };

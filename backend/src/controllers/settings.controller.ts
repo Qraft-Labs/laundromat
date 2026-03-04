@@ -1,0 +1,303 @@
+import { Response } from 'express';
+import { query } from '../config/database';
+import { AuthRequest } from '../middleware/auth';
+
+interface BusinessHoursDay {
+  open: string;
+  close: string;
+  closed: boolean;
+}
+
+interface BusinessHours {
+  sunday: BusinessHoursDay;
+  monday: BusinessHoursDay;
+  tuesday: BusinessHoursDay;
+  wednesday: BusinessHoursDay;
+  thursday: BusinessHoursDay;
+  friday: BusinessHoursDay;
+  saturday: BusinessHoursDay;
+}
+
+export const getBusinessHours = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT setting_value FROM business_settings WHERE setting_key = 'business_hours'`
+    );
+
+    if (result.rows.length === 0) {
+      // Return default business hours if not set
+      return res.json({
+        monday: { open: '07:00', close: '21:00', closed: false },
+        tuesday: { open: '07:00', close: '21:00', closed: false },
+        wednesday: { open: '07:00', close: '21:00', closed: false },
+        thursday: { open: '07:00', close: '21:00', closed: false },
+        friday: { open: '07:00', close: '21:00', closed: false },
+        saturday: { open: '07:00', close: '21:00', closed: false },
+        sunday: { open: '09:00', close: '15:00', closed: false },
+      });
+    }
+
+    res.json(result.rows[0].setting_value);
+  } catch (error) {
+    console.error('Get business hours error:', error);
+    res.status(500).json({ error: 'Failed to fetch business hours' });
+  }
+};
+
+export const updateBusinessHours = async (req: AuthRequest, res: Response) => {
+  try {
+    const businessHours: BusinessHours = req.body;
+
+    // Validate the structure
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    for (const day of days) {
+      if (!businessHours[day as keyof BusinessHours]) {
+        return res.status(400).json({ error: `Missing data for ${day}` });
+      }
+    }
+
+    const result = await query(
+      `INSERT INTO business_settings (setting_key, setting_value, updated_at)
+       VALUES ('business_hours', $1, NOW())
+       ON CONFLICT (setting_key) 
+       DO UPDATE SET setting_value = $1, updated_at = NOW()
+       RETURNING setting_value`,
+      [JSON.stringify(businessHours)]
+    );
+
+    res.json(result.rows[0].setting_value);
+  } catch (error) {
+    console.error('Update business hours error:', error);
+    res.status(500).json({ error: 'Failed to update business hours' });
+  }
+};
+export const getAllSettings = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT setting_key, setting_value FROM business_settings`
+    );
+
+    const settings: Record<string, any> = {};
+    result.rows.forEach((row) => {
+      // Parse JSON values, handle strings
+      try {
+        settings[row.setting_key] = JSON.parse(row.setting_value);
+      } catch {
+        settings[row.setting_key] = row.setting_value;
+      }
+    });
+
+    res.json(settings);
+  } catch (error) {
+    console.error('Get all settings error:', error);
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+};
+
+export const bulkUpdateSettings = async (req: AuthRequest, res: Response) => {
+  try {
+    const { settings } = req.body;
+
+    if (!settings || typeof settings !== 'object') {
+      return res.status(400).json({ error: 'Invalid settings data' });
+    }
+
+    // Update each setting
+    for (const [key, value] of Object.entries(settings)) {
+      await query(
+        `INSERT INTO business_settings (setting_key, setting_value, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (setting_key) 
+         DO UPDATE SET setting_value = $2, updated_at = NOW()`,
+        [key, JSON.stringify(value)]
+      );
+    }
+
+    res.json({ message: 'Settings updated successfully' });
+  } catch (error) {
+    console.error('Bulk update settings error:', error);
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+};
+export const getBusinessInfo = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await query(
+      "SELECT setting_value FROM business_settings WHERE setting_key = 'business_info'"
+    );
+    if (result.rows.length === 0) {
+      return res.json({
+        name: 'Lush Dry Cleaners & Laundromat',
+        phone: '+256 754 723 614',
+        email: 'info@lushdrycleaners.ug',
+        location: 'Kampala, Uganda',
+        address: '',
+        tin: ''
+      });
+    }
+    res.json(result.rows[0].setting_value);
+  } catch (error) {
+    console.error('Get business info error:', error);
+    res.status(500).json({ error: 'Failed to fetch business info' });
+  }
+};
+
+export const updateBusinessInfo = async (req: AuthRequest, res: Response) => {
+  try {
+    const { name, phone, email, location, address, tin } = req.body;
+    if (!name || !phone) {
+      return res.status(400).json({ error: 'Business name and phone are required' });
+    }
+    const businessInfo = { name, phone, email: email || '', location: location || '', address: address || '', tin: tin || '' };
+    const result = await query(
+      "INSERT INTO business_settings (setting_key, setting_value, updated_at) VALUES ('business_info', $1, NOW()) ON CONFLICT (setting_key) DO UPDATE SET setting_value = $1, updated_at = NOW() RETURNING setting_value",
+      [JSON.stringify(businessInfo)]
+    );
+    res.json(result.rows[0].setting_value);
+  } catch (error) {
+    console.error('Update business info error:', error);
+    res.status(500).json({ error: 'Failed to update business info' });
+  }
+};
+
+// VAT Settings
+export const getVATSettings = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT setting_value FROM business_settings WHERE setting_key = 'vat_enabled'`
+    );
+
+    if (result.rows.length === 0) {
+      // Return default (VAT disabled)
+      return res.json({
+        enabled: false,
+        rate: 18
+      });
+    }
+
+    res.json(result.rows[0].setting_value);
+  } catch (error) {
+    console.error('Get VAT settings error:', error);
+    res.status(500).json({ error: 'Failed to fetch VAT settings' });
+  }
+};
+
+export const updateVATSettings = async (req: AuthRequest, res: Response) => {
+  try {
+    // Only ADMIN can toggle VAT
+    if (req.user?.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Only administrators can change VAT settings' });
+    }
+
+    const { enabled, rate } = req.body;
+
+    // Validate inputs
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'enabled must be a boolean' });
+    }
+
+    const vatRate = parseFloat(rate) || 18;
+
+    if (vatRate < 0 || vatRate > 100) {
+      return res.status(400).json({ error: 'VAT rate must be between 0 and 100' });
+    }
+
+    const result = await query(
+      `INSERT INTO business_settings (setting_key, setting_value, updated_at)
+       VALUES ('vat_enabled', $1, NOW())
+       ON CONFLICT (setting_key) 
+       DO UPDATE SET setting_value = $1, updated_at = NOW()
+       RETURNING setting_value`,
+      [JSON.stringify({ enabled, rate: vatRate })]
+    );
+
+    // Log the change
+    console.log(`✅ VAT ${enabled ? 'ENABLED' : 'DISABLED'} by ${req.user?.email} (Rate: ${vatRate}%)`);
+
+    res.json({
+      message: `VAT ${enabled ? 'enabled' : 'disabled'} successfully`,
+      settings: result.rows[0].setting_value
+    });
+  } catch (error) {
+    console.error('Update VAT settings error:', error);
+    res.status(500).json({ error: 'Failed to update VAT settings' });
+  }
+};
+
+export const getBargainLimits = async (req: AuthRequest, res: Response) => {
+  try {
+    // Get bargain limits from sample users of each role
+    const result = await query(
+      `SELECT role, max_bargain_amount 
+       FROM users 
+       WHERE role IN ('DESKTOP_AGENT', 'MANAGER', 'ADMIN')
+       GROUP BY role, max_bargain_amount
+       ORDER BY role`
+    );
+
+    const limits: any = {
+      desktop_agent: 5000, // defaults
+      manager: 10000,
+      admin: 50000,
+    };
+
+    result.rows.forEach(row => {
+      if (row.role === 'DESKTOP_AGENT') {
+        limits.desktop_agent = row.max_bargain_amount;
+      } else if (row.role === 'MANAGER') {
+        limits.manager = row.max_bargain_amount;
+      } else if (row.role === 'ADMIN') {
+        limits.admin = row.max_bargain_amount;
+      }
+    });
+
+    res.json(limits);
+  } catch (error) {
+    console.error('Get bargain limits error:', error);
+    res.status(500).json({ error: 'Failed to fetch bargain limits' });
+  }
+};
+
+export const updateBargainLimits = async (req: AuthRequest, res: Response) => {
+  try {
+    const { desktop_agent_limit, manager_limit, admin_limit } = req.body;
+
+    // Validate inputs
+    if (desktop_agent_limit < 0 || manager_limit < 0 || admin_limit < 0) {
+      return res.status(400).json({ error: 'Bargain limits cannot be negative' });
+    }
+
+    // Update all users by role
+    await query(
+      `UPDATE users SET max_bargain_amount = $1 WHERE role = 'DESKTOP_AGENT'`,
+      [desktop_agent_limit]
+    );
+
+    await query(
+      `UPDATE users SET max_bargain_amount = $1 WHERE role = 'MANAGER'`,
+      [manager_limit]
+    );
+
+    await query(
+      `UPDATE users SET max_bargain_amount = $1 WHERE role = 'ADMIN'`,
+      [admin_limit]
+    );
+
+    // Log the change
+    console.log(`✅ Bargain limits updated by ${req.user?.email}`);
+    console.log(`   Desktop Agent: UGX ${desktop_agent_limit.toLocaleString()}`);
+    console.log(`   Manager:       UGX ${manager_limit.toLocaleString()}`);
+    console.log(`   Admin:         UGX ${admin_limit.toLocaleString()}`);
+
+    res.json({
+      message: 'Bargain limits updated successfully',
+      limits: {
+        desktop_agent: desktop_agent_limit,
+        manager: manager_limit,
+        admin: admin_limit,
+      },
+    });
+  } catch (error) {
+    console.error('Update bargain limits error:', error);
+    res.status(500).json({ error: 'Failed to update bargain limits' });
+  }
+};
