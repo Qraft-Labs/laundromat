@@ -2,14 +2,15 @@
 # Backend Deployment Script for Contabo VPS
 # Run this script on your Contabo server to deploy/update backend
 
-set -e  # Exit on any error
+set -euo pipefail
 
 echo "🚀 Starting Lush Laundry Backend Deployment..."
 
 # Configuration
-REPO_DIR="/opt/lush_laundry"
+REPO_DIR="${REPO_DIR:-/opt/lush_laundry}"
 BACKEND_DIR="$REPO_DIR/backend"
-BRANCH="main"
+BRANCH="${BRANCH:-main}"
+PM2_APP_NAME="${PM2_APP_NAME:-lush-backend}"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -30,68 +31,65 @@ print_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
-# Check if running as root or with sudo
-if [ "$EUID" -ne 0 ]; then 
-    print_error "Please run with sudo or as root"
-    exit 1
-fi
-
 # Navigate to repository
-cd $REPO_DIR || {
+cd "$REPO_DIR" || {
     print_error "Repository directory not found at $REPO_DIR"
     exit 1
 }
 
-# Backup current .env
-print_step "Backing up .env file..."
-cp $BACKEND_DIR/.env $BACKEND_DIR/.env.backup
+# Ensure backend .env exists
+if [ ! -f "$BACKEND_DIR/.env" ]; then
+    print_error "Missing $BACKEND_DIR/.env. Create it from backend/.env.production.example first."
+    exit 1
+fi
 
 # Pull latest code
 print_step "Pulling latest code from $BRANCH..."
 git fetch origin
-git checkout $BRANCH
-git pull origin $BRANCH
+git checkout "$BRANCH"
+git pull --ff-only origin "$BRANCH"
 
 # Navigate to backend
-cd $BACKEND_DIR
-
-# Restore .env
-print_step "Restoring .env file..."
-mv .env.backup .env
+cd "$BACKEND_DIR"
 
 # Install dependencies
-print_step "Installing dependencies..."
-npm install --production
-
-# Run database migrations
-print_warning "Running database migrations..."
-npm run migrate || print_warning "Migrations may have failed or already applied"
+print_step "Installing dependencies (including build tools)..."
+npm ci
 
 # Build TypeScript
 print_step "Building TypeScript..."
 npm run build
 
+# Run database migrations from compiled output
+if [ -f "dist/database/migrate.js" ]; then
+    print_warning "Running database migrations..."
+    node dist/database/migrate.js
+else
+    print_warning "Compiled migration file not found, falling back to npm run migrate..."
+    npm run migrate
+fi
+
 # Restart PM2 process
 print_step "Restarting backend service..."
-pm2 restart lush-backend || {
+pm2 restart "$PM2_APP_NAME" || {
     print_warning "PM2 process not found. Starting new process..."
-    pm2 start dist/server.js --name lush-backend
+    pm2 start npm --name "$PM2_APP_NAME" -- start
     pm2 save
 }
 
 # Show status
 print_step "Checking service status..."
-pm2 status lush-backend
+pm2 status "$PM2_APP_NAME"
 
 # Show recent logs
 print_step "Recent logs:"
-pm2 logs lush-backend --lines 20 --nostream
+pm2 logs "$PM2_APP_NAME" --lines 20 --nostream
 
 echo ""
 print_step "🎉 Backend deployment completed successfully!"
 echo ""
 echo "Useful commands:"
-echo "  pm2 logs lush-backend           # View logs"
-echo "  pm2 restart lush-backend        # Restart service"
+echo "  pm2 logs $PM2_APP_NAME           # View logs"
+echo "  pm2 restart $PM2_APP_NAME        # Restart service"
 echo "  pm2 monit                        # Monitor resources"
 echo ""
