@@ -8,13 +8,13 @@ on:
 jobs:
   test:
     name: Run Tests
-    uses: ./.github/workflows/test.yml
+    uses: ./.github/workflows/test.yml  # Calls test workflow
 
   deploy-staging:
     name: Deploy to Staging Server
     needs: test
     runs-on: ubuntu-latest
-    environment: staging
+    environment: staging  # Create this environment in GitHub repo settings
     
     steps:
       - name: Checkout code

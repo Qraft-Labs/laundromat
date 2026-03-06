@@ -21,7 +21,7 @@ jobs:
   test:
     name: Run Tests
     if: ${{ github.event.inputs.skip_tests != 'true' }}
-    uses: ./.github/workflows/test.yml
+    uses: ./.github/workflows/test.yml  # Calls test workflow
 
   deploy-backend:
     name: Deploy Backend to Production
@@ -32,7 +32,7 @@ jobs:
        needs.test.result == 'skipped' || 
        github.event.inputs.skip_tests == 'true')
     runs-on: ubuntu-latest
-    environment: production
+    environment: production  # Create this environment in GitHub repo settings
     
     steps:
       - name: Checkout code
@@ -150,7 +150,7 @@ jobs:
        needs.test.result == 'skipped' || 
        github.event.inputs.skip_tests == 'true')
     runs-on: ubuntu-latest
-    environment: production
+    environment: production  # Create this environment in GitHub repo settings
     
     steps:
       - name: Checkout code
