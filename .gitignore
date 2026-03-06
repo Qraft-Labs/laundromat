@@ -31,3 +31,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# server-only
+backend/ecosystem.config.cjs
+backend/ecosystem.config.cjs.bak.*

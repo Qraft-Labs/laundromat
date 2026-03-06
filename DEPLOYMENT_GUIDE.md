@@ -24,7 +24,7 @@
     cd backend
 
     # Install dependencies
-    npm install --production
+    npm ci
 
     # Set environment variables (create .env file)
     cp .env.example .env
@@ -32,10 +32,11 @@
 
     # Build TypeScript
     npm run build
+    node dist/database/migrate.js
 
     # Start with PM2 (process manager)
     npm install -g pm2
-    pm2 start dist/server.js --name lush-laundry-api
+    pm2 start npm --name lush-laundry-api -- start
     pm2 save
     pm2 startup  # Follow instructions to enable on boot
     ```
@@ -47,11 +48,11 @@
     FROM node:20-alpine
     WORKDIR /app
     COPY package*.json ./
-    RUN npm install --production
+    RUN npm ci
     COPY . .
     RUN npm run build
     EXPOSE 5000
-    CMD ["node", "dist/server.js"]
+    CMD ["node", "dist/index.js"]
     ```
 
     ```bash

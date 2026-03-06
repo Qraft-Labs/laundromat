@@ -63,13 +63,13 @@ PORT=5000
 
 ```bash
 # 6. Install & build
-npm install --production
-npm run migrate  # Create database tables
+npm ci
 npm run build    # Compile TypeScript
+node dist/database/migrate.js  # Run migrations from compiled output
 
 # 7. Start with PM2
 npm install -g pm2
-pm2 start dist/server.js --name lush-backend
+pm2 start npm --name lush-backend -- start
 pm2 startup  # Follow instructions
 pm2 save
 ```
@@ -127,8 +127,9 @@ chmod +x deploy-backend.sh
 cd /opt/lush_laundry
 git pull origin main
 cd backend
-npm install --production
+npm ci
 npm run build
+node dist/database/migrate.js
 pm2 restart lush-backend
 ```
 
@@ -291,7 +292,7 @@ ssh root@your-contabo-ip "pm2 logs lush-backend --lines 50"
 Make sure backend allows Netlify domains:
 
 ```typescript
-// backend/src/server.ts
+// backend/src/index.ts
 app.use(cors({
   origin: [
     'https://your-app.netlify.app',

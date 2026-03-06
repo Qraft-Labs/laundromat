@@ -564,7 +564,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       if (autoSendReceipt) {
         const customerId = customer_id; // Store before client is released
         sendOrderConfirmation(customerName, customerPhone, order_number, orderDetails)
-          .then(async (result) => {
+          .then(async (result: any) => {
             if (result.success) {
               console.log(`✅ WhatsApp confirmation sent for order ${order_number}`);
               
@@ -592,7 +592,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
               console.error(`❌ WhatsApp failed for order ${order_number}:`, result.error);
             }
           })
-          .catch((error) => {
+          .catch((error: any) => {
             console.error(`❌ WhatsApp error for order ${order_number}:`, error);
           });
       } else {
@@ -663,7 +663,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
             if (sent) {
               console.log(`✅ SMS backup receipt sent for ${order_number}`);
             }
-          }).catch((error) => {
+          }).catch((error: any) => {
             console.error(`❌ SMS receipt failed:`, error);
           });
           
@@ -677,7 +677,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
             }
           }, 30000);
         })
-        .catch((error) => {
+        .catch((error: any) => {
           console.error(`❌ Failed to generate/send receipt for ${order_number}:`, error);
         });
     }
@@ -1022,7 +1022,7 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
             console.log(`ℹ️ SMS notification skipped for order ${orderNumber} (SMS disabled or failed)`);
           }
         })
-        .catch((error) => {
+        .catch((error: any) => {
           console.error(`❌ Failed to send SMS for order ${orderNumber}:`, error);
         });
       
@@ -1046,7 +1046,7 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
             balance
           }
         )
-          .then(async (result) => {
+          .then(async (result: any) => {
             if (result.success) {
               console.log(`✅ WhatsApp ready notification sent for order ${orderNumber}`);
               
@@ -1074,7 +1074,7 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
               console.error(`❌ WhatsApp failed for order ${orderNumber}:`, result.error);
             }
           })
-          .catch((error) => {
+          .catch((error: any) => {
             console.error(`❌ WhatsApp error for order ${orderNumber}:`, error);
           });
       } else {
