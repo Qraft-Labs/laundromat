@@ -21,17 +21,18 @@ router.post('/profile-picture', authenticate as any, upload.single('profilePictu
 router.post('/session-timeout', authenticate as any, authController.updateSessionTimeout as any);
 router.post('/change-password', authenticate as any, authController.changePassword as any);
 
-// Google OAuth routes
-router.get('/google', passport.authenticate('google', {
-  scope: ['profile', 'email']
-}));
+// Google OAuth routes (only if credentials are configured)
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_CALLBACK_URL) {
+  router.get('/google', passport.authenticate('google', {
+    scope: ['profile', 'email']
+  }));
 
-router.get('/google/callback', 
-  passport.authenticate('google', { 
-    failureRedirect: `${process.env.FRONTEND_URL}/login?error=auth_failed`,
-    session: false
-  }),
-  (req: Request, res: Response) => {
+  router.get('/google/callback', 
+    passport.authenticate('google', { 
+      failureRedirect: `${process.env.FRONTEND_URL}/login?error=auth_failed`,
+      session: false
+    }),
+    (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
       
@@ -75,5 +76,17 @@ router.get('/google/callback',
     }
   }
 );
+} else {
+  // Return error if OAuth routes are accessed when not configured
+  router.get('/google', (req: Request, res: Response) => {
+    res.status(503).json({ 
+      error: 'Google OAuth is not configured on this server. Please use email/password login.' 
+    });
+  });
+  
+  router.get('/google/callback', (req: Request, res: Response) => {
+    res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_not_configured`);
+  });
+}
 
 export default router;
