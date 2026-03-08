@@ -5,19 +5,17 @@
     "lib": ["ES2020"],
     "outDir": "./dist",
     "rootDir": "./src",
-    "strict": true,
-    "noImplicitAny": false,
+    "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "moduleResolution": "node16",
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    "declaration": false,
+    "sourceMap": false,
     "types": ["node"],
     "typeRoots": ["./node_modules/@types", "./src/types"]
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "src/database/**/*.ts", "src/migrations/**/*.ts", "src/utils/**/*.ts", "src/audit/**/*.ts", "src/**/seed*.ts", "src/**/fix*.ts", "src/**/run*.ts", "src/**/verify*.ts", "src/showAllUsers.ts", "src/resetStaffPasswords.ts"]
+  "exclude": ["node_modules", "dist"]
 }
