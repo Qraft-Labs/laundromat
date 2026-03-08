@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '@/lib/api';
-import { Bell, Check, X, Trash2, Clock, CheckCircle, AlertCircle, DollarSign, Receipt, Megaphone, ShoppingCart, RotateCcw } from 'lucide-react';
+import { Bell, Check, X, Trash2, Clock, CheckCircle, AlertCircle, DollarSign, Receipt, Megaphone, ShoppingCart, RotateCcw, Database } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -148,6 +148,17 @@ export function NotificationDropdown() {
         setAnnouncementDialog(notification);
         break;
       
+      case 'BACKUP_SUCCESS':
+      case 'BACKUP_FAILED':
+      case 'BACKUP_EMAIL_SENT':
+        // Navigate to Settings > Data Management
+        if (notification.link) {
+          navigate(notification.link);
+        } else {
+          navigate('/settings?tab=data-management');
+        }
+        break;
+      
       case 'EXPENSE':
       case 'EXPENSE_CREATED':
       case 'EXPENSE_UPDATED':
@@ -213,6 +224,11 @@ export function NotificationDropdown() {
     switch (normalizedType) {
       case 'ANNOUNCEMENT':
         return <Megaphone className="h-4 w-4 text-purple-600" />;
+      case 'BACKUP_SUCCESS':
+      case 'BACKUP_EMAIL_SENT':
+        return <Database className="h-4 w-4 text-green-600" />;
+      case 'BACKUP_FAILED':
+        return <Database className="h-4 w-4 text-red-600" />;
       case 'EXPENSE':
       case 'EXPENSE_CREATED':
       case 'EXPENSE_UPDATED':

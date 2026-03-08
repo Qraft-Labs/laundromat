@@ -141,14 +141,14 @@ export default function Settings() {
   // Email backup settings
   const [emailBackupEnabled, setEmailBackupEnabled] = useState(false);
   const [backupEmail, setBackupEmail] = useState('');
-  const [backupFrequency, setBackupFrequency] = useState('weekly');
+  const [backupFrequency, setBackupFrequency] = useState('daily');
   const [savingEmailSettings, setSavingEmailSettings] = useState(false);
+  
+  // Backup categories selection
+  const [backupCategories, setBackupCategories] = useState<string[]>(['orders', 'customers', 'payments']);
   
   // Daily email backup state
   const [sendingDailyBackup, setSendingDailyBackup] = useState(false);
-  const [sendingTestEmail, setSendingTestEmail] = useState(false);
-  const [testEmail, setTestEmail] = useState('');
-  const [showTestEmailDialog, setShowTestEmailDialog] = useState(false);
 
   // Session timeout state - load from user object
   const [sessionTimeout, setSessionTimeout] = useState<number>(15);
@@ -282,6 +282,11 @@ export default function Settings() {
       setEnableEfris(settings.enable_efris === 'true' || settings.enable_efris === true);
       setInvoicePrefix(settings.invoice_prefix || 'INV');
       setInvoiceFooter(settings.invoice_footer_text || '');
+      
+      // Automatically set backup email to business email
+      if (settings.business_email) {
+        setBackupEmail(settings.business_email);
+      }
     } catch (error) {
       console.error('Failed to load URA settings:', error);
     }
@@ -846,13 +851,14 @@ Don't miss out! ✨`;
           enabled: emailBackupEnabled,
           email: backupEmail,
           frequency: backupFrequency,
+          categories: backupCategories,
         },
         { headers: { Authorization: `Bearer ${token}` } }
       );
       toast({
         title: 'Settings Saved',
         description: emailBackupEnabled 
-          ? `Automatic backups will be sent to ${backupEmail} ${backupFrequency}` 
+          ? `Automatic backups will be sent to ${backupEmail} ${backupFrequency} with ${backupCategories.length} categories` 
           : 'Automatic email backups disabled',
       });
     } catch (error) {
@@ -889,37 +895,13 @@ Don't miss out! ✨`;
     }
   };
 
-  const sendTestEmail = async () => {
-    if (!testEmail) {
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Please enter an email address',
-      });
-      return;
-    }
-
-    try {
-      setSendingTestEmail(true);
-      await axios.post(
-        `${API_BASE_URL}/backup/email/test`,
-        { email: testEmail },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      toast({
-        title: 'Test Email Sent',
-        description: `Check ${testEmail} for the test backup email`,
-      });
-      setTestEmail('');
-    } catch (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Failed to send test email',
-      });
-    } finally {
-      setSendingTestEmail(false);
-    }
+  // Toggle backup category selection
+  const toggleBackupCategory = (category: string) => {
+    setBackupCategories(prev => 
+      prev.includes(category)
+        ? prev.filter(c => c !== category)
+        : [...prev, category]
+    );
   };
 
   return (
@@ -1889,42 +1871,85 @@ Don't miss out! ✨`;
 
                   {emailBackupEnabled && (
                     <>
-                      <div>
-                        <Label htmlFor="backupEmail" className="text-sm text-purple-700 dark:text-purple-300">
-                          Administrator Email
+                      <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg">
+                        <Label className="text-sm text-purple-700 dark:text-purple-300">
+                          📧 Backup Email Address
                         </Label>
-                        <Input 
-                          id="backupEmail"
-                          type="email"
-                          value={backupEmail}
-                          onChange={(e) => setBackupEmail(e.target.value)}
-                          placeholder="admin@example.com"
-                          className="mt-1 bg-white dark:bg-gray-900"
-                        />
+                        <p className="text-xs text-purple-600 dark:text-purple-400 mt-1 mb-2">
+                          Backups will be sent to the business email from Business Information settings
+                        </p>
+                        <div className="flex items-center gap-2 p-2 bg-white dark:bg-gray-900 rounded border border-purple-200 dark:border-purple-700">
+                          <Mail className="h-4 w-4 text-purple-500" />
+                          <span className="text-sm font-medium text-purple-900 dark:text-purple-100">
+                            {backupEmail || businessEmail || 'No business email configured'}
+                          </span>
+                        </div>
                         <p className="text-xs text-purple-600 dark:text-purple-400 mt-1">
-                          Backups will be sent to this email address
+                          💡 Update in Business Information section to change backup email
                         </p>
                       </div>
 
                       <div>
+                        <Label className="text-sm text-purple-700 dark:text-purple-300">
+                          📦 What to Include in Backups
+                        </Label>
+                        <p className="text-xs text-purple-600 dark:text-purple-400 mb-2">
+                          Select which data categories to include in automatic backups
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-white dark:bg-gray-900 p-3 rounded-lg border border-purple-200 dark:border-purple-700">
+                          {[
+                            { id: 'orders', label: '📋 Orders & Order Items', desc: 'All order records' },
+                            { id: 'customers', label: '👥 Customers', desc: 'Customer information' },
+                            { id: 'payments', label: '💰 Payments', desc: 'Payment transactions' },
+                            { id: 'inventory', label: '📦 Inventory', desc: 'Inventory items & transactions' },
+                            { id: 'deliveries', label: '🚚 Deliveries', desc: 'Delivery records' },
+                            { id: 'expenses', label: '💸 Expenses', desc: 'Expense records' },
+                          ].map(category => (
+                            <div key={category.id} className="flex items-start space-x-2 p-2 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded">
+                              <input
+                                type="checkbox"
+                                id={`backup-${category.id}`}
+                                checked={backupCategories.includes(category.id)}
+                                onChange={() => toggleBackupCategory(category.id)}
+                                className="mt-1 h-4 w-4 text-purple-600 focus:ring-purple-500 rounded"
+                              />
+                              <label htmlFor={`backup-${category.id}`} className="flex-1 cursor-pointer">
+                                <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                                  {category.label}
+                                </div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400">
+                                  {category.desc}
+                                </div>
+                              </label>
+                            </div>
+                          ))}
+                        </div>
+                        {backupCategories.length === 0 && (
+                          <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                            ⚠️ Please select at least one category
+                          </p>
+                        )}
+                      </div>
+
+                      <div>
                         <Label htmlFor="backupFrequency" className="text-sm text-purple-700 dark:text-purple-300">
-                          Backup Frequency
+                          📅 Backup Schedule
                         </Label>
                         <Select value={backupFrequency} onValueChange={setBackupFrequency}>
                           <SelectTrigger id="backupFrequency" className="mt-1 bg-white dark:bg-gray-900">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="daily">📅 Daily (Every day at 3 AM)</SelectItem>
-                            <SelectItem value="weekly">📆 Weekly (Every Sunday at 3 AM)</SelectItem>
-                            <SelectItem value="monthly">🗓️ Monthly (1st of each month at 3 AM)</SelectItem>
+                            <SelectItem value="daily">📅 Daily - Every day at 11:59 PM (EAT)</SelectItem>
+                            <SelectItem value="weekly">📆 Weekly - Every Sunday at 11:59 PM (EAT)</SelectItem>
+                            <SelectItem value="monthly">🗓️ Monthly - 1st of each month at 11:59 PM (EAT)</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
 
                       <Button 
                         onClick={saveEmailBackupSettings}
-                        disabled={savingEmailSettings || !backupEmail}
+                        disabled={savingEmailSettings || !backupEmail || backupCategories.length === 0}
                         className="w-full bg-purple-600 hover:bg-purple-700 text-white"
                       >
                         {savingEmailSettings ? 'Saving...' : 'Save Automatic Backup Settings'}
@@ -1983,47 +2008,24 @@ Don't miss out! ✨`;
                           <strong>Recipients:</strong> All users with Administrator role and configured email
                         </p>
                         
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <Button
-                            onClick={sendDailyBackupNow}
-                            disabled={sendingDailyBackup}
-                            size="sm"
-                            className="w-full sm:flex-1 bg-green-600 hover:bg-green-700 text-white"
-                          >
-                            {sendingDailyBackup ? (
-                              <>
-                                <span className="animate-spin mr-2">⏳</span>
-                                Sending...
-                              </>
-                            ) : (
-                              <>
-                                <Send className="h-4 w-4 mr-2 flex-shrink-0" />
-                                <span>Send Backup Now</span>
-                              </>
-                            )}
-                          </Button>
-                          <Button
-                            onClick={() => {
-                              setShowTestEmailDialog(true);
-                            }}
-                            disabled={sendingTestEmail}
-                            size="sm"
-                            variant="outline"
-                            className="w-full sm:flex-1 border-green-600 text-green-700 hover:bg-green-50 dark:border-green-400 dark:text-green-300 dark:hover:bg-green-900"
-                          >
-                            {sendingTestEmail ? (
-                              <>
-                                <span className="animate-spin mr-2">⏳</span>
-                                Sending...
-                              </>
-                            ) : (
-                              <>
-                                <Mail className="h-4 w-4 mr-2 flex-shrink-0" />
-                                <span>Send Test Email</span>
-                              </>
-                            )}
-                          </Button>
-                        </div>
+                        <Button
+                          onClick={sendDailyBackupNow}
+                          disabled={sendingDailyBackup}
+                          size="sm"
+                          className="w-full bg-green-600 hover:bg-green-700 text-white"
+                        >
+                          {sendingDailyBackup ? (
+                            <>
+                              <span className="animate-spin mr-2">⏳</span>
+                              Sending...
+                            </>
+                          ) : (
+                            <>
+                              <Send className="h-4 w-4 mr-2 flex-shrink-0" />
+                              <span>Send Daily Backup Now</span>
+                            </>
+                          )}
+                        </Button>
                       </div>
                     </div>
 
@@ -2190,55 +2192,6 @@ Don't miss out! ✨`;
               disabled={!selectedYear || !orderStats || isLoading}
             >
               {isLoading ? 'Deleting...' : 'Delete Orders'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      )}
-
-      {/* Test Email Dialog - Admin Only */}
-      {isAdmin && (
-      <Dialog open={showTestEmailDialog} onOpenChange={setShowTestEmailDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Send Test Backup Email</DialogTitle>
-            <DialogDescription>
-              Enter an email address to receive a test daily backup email. This helps verify your email configuration.
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="space-y-4 py-4">
-            <div>
-              <Label htmlFor="testEmail">Email Address</Label>
-              <Input
-                id="testEmail"
-                type="email"
-                placeholder="admin@example.com"
-                value={testEmail}
-                onChange={(e) => setTestEmail(e.target.value)}
-                className="mt-1"
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button 
-              variant="outline" 
-              onClick={() => {
-                setShowTestEmailDialog(false);
-                setTestEmail('');
-              }}
-            >
-              Cancel
-            </Button>
-            <Button 
-              onClick={() => {
-                sendTestEmail();
-                setShowTestEmailDialog(false);
-              }}
-              disabled={!testEmail || sendingTestEmail}
-            >
-              {sendingTestEmail ? 'Sending...' : 'Send Test Email'}
             </Button>
           </DialogFooter>
         </DialogContent>

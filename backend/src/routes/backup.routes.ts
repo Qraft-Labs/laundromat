@@ -10,7 +10,6 @@ import {
   saveEmailBackupSettings,
   getEmailBackupSettings,
   sendDailyBackupEmail,
-  sendTestBackupEmail,
 } from '../controllers/backup.controller';
 
 const router = express.Router();
@@ -32,11 +31,6 @@ router.post('/email-settings', saveEmailBackupSettings as any);
 
 // Send daily backup email now (manual trigger)
 router.post('/email/send-now', sendDailyBackupEmail as any);
-
-// Send test backup email
-router.post('/email/test', [
-  body('email').isEmail().withMessage('Valid email address is required'),
-], sendTestBackupEmail as any);
 
 // Create and download backup
 router.post(

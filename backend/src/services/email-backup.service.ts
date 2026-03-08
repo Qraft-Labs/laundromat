@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { query } from '../config/database';
+import { notifyDailyBackupSent, notifyDailyBackupFailed } from './notification.service';
 
 interface DailyBackupData {
   date: string;
@@ -294,6 +295,13 @@ export class EmailBackupService {
       
       console.log(`✅ Daily backup email sent successfully to: ${adminEmails.join(', ')}`);
 
+      // Send in-app notification to administrators
+      await notifyDailyBackupSent(
+        adminEmails.length,
+        backupData.summary.totalOrders,
+        backupData.summary.newCustomers
+      );
+
       return {
         success: true,
         message: `Daily backup email sent to ${adminEmails.length} administrator(s)`,
@@ -301,44 +309,14 @@ export class EmailBackupService {
       };
     } catch (error) {
       console.error('❌ Failed to send daily backup email:', error);
+      
+      // Send failure notification to administrators
+      const errorMessage = error instanceof Error ? error.message : 'Failed to send backup email';
+      await notifyDailyBackupFailed(errorMessage);
+      
       return {
         success: false,
-        message: error instanceof Error ? error.message : 'Failed to send backup email',
-      };
-    }
-  }
-
-  /**
-   * Send test email to verify configuration
-   */
-  async sendTestEmail(testEmail: string): Promise<{ success: boolean; message: string }> {
-    try {
-      await this.transporter.sendMail({
-        from: `"Lush Laundry System" <${process.env.BACKUP_EMAIL_USER || process.env.EMAIL_USER}>`,
-        to: testEmail,
-        subject: '✅ Lush Laundry - Email Backup Test',
-        html: `
-          <div style="font-family: Arial, sans-serif; padding: 20px;">
-            <h2 style="color: #6366f1;">Email Backup Configuration Test</h2>
-            <p>This is a test email to verify that your automated backup email system is working correctly.</p>
-            <p>If you received this email, your configuration is correct! ✅</p>
-            <hr style="border: 1px solid #e5e7eb; margin: 20px 0;">
-            <p style="color: #6b7280; font-size: 14px;">
-              Daily backup emails will be sent automatically at 11:59 PM every day.<br>
-              Sent from: Lush Laundry Management System
-            </p>
-          </div>
-        `,
-      });
-
-      return {
-        success: true,
-        message: 'Test email sent successfully',
-      };
-    } catch (error) {
-      return {
-        success: false,
-        message: error instanceof Error ? error.message : 'Failed to send test email',
+        message: errorMessage,
       };
     }
   }

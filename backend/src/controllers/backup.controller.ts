@@ -3,6 +3,7 @@ import { AuthRequest } from '../middleware/auth';
 import { query } from '../config/database';
 import { emailBackupService } from '../services/email-backup.service';
 import { dailyBackupScheduler } from '../services/daily-backup.scheduler';
+import { notifyBackupSuccess, notifyBackupFailure } from '../services/notification.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -77,6 +78,10 @@ export const createBackup = async (req: AuthRequest, res: Response) => {
     const typeLabel = tables === 'all' ? 'full' : tables.replace(/,/g, '_');
     const filename = `lush_laundry_${typeLabel}_backup_${timestamp}.json`;
     
+    // Send notification to administrators
+    const backupType = tables === 'all' ? 'Full Backup' : `Partial Backup: ${tables}`;
+    await notifyBackupSuccess(backupSize, backupType, req.user?.id);
+    
     // Set response headers for download
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -84,6 +89,11 @@ export const createBackup = async (req: AuthRequest, res: Response) => {
     res.json(backupData);
   } catch (error) {
     console.error('Create backup error:', error);
+    
+    // Send failure notification to administrators
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    await notifyBackupFailure(errorMessage, req.user?.id);
+    
     res.status(500).json({ error: 'Failed to create backup' });
   }
 };
@@ -184,7 +194,7 @@ export const getBackupHistory = async (req: AuthRequest, res: Response) => {
  */
 export const saveEmailBackupSettings = async (req: AuthRequest, res: Response) => {
   try {
-    const { enabled, email, frequency } = req.body;
+    const { enabled, email, frequency, categories } = req.body;
     
     // Create settings table if it doesn't exist
     await query(`
@@ -193,6 +203,7 @@ export const saveEmailBackupSettings = async (req: AuthRequest, res: Response) =
         enabled BOOLEAN DEFAULT false,
         email VARCHAR(255),
         frequency VARCHAR(50),
+        categories JSONB DEFAULT '["orders", "customers", "payments"]'::jsonb,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_by VARCHAR(255)
       )
@@ -205,23 +216,23 @@ export const saveEmailBackupSettings = async (req: AuthRequest, res: Response) =
       // Update existing
       await query(
         `UPDATE backup_email_settings 
-         SET enabled = $1, email = $2, frequency = $3, 
-             updated_at = CURRENT_TIMESTAMP, updated_by = $4
-         WHERE id = $5`,
-        [enabled, email, frequency, req.user?.email, existing.rows[0].id]
+         SET enabled = $1, email = $2, frequency = $3, categories = $4,
+             updated_at = CURRENT_TIMESTAMP, updated_by = $5
+         WHERE id = $6`,
+        [enabled, email, frequency, JSON.stringify(categories || ['orders', 'customers', 'payments']), req.user?.email, existing.rows[0].id]
       );
     } else {
       // Insert new
       await query(
-        `INSERT INTO backup_email_settings (enabled, email, frequency, updated_by) 
-         VALUES ($1, $2, $3, $4)`,
-        [enabled, email, frequency, req.user?.email]
+        `INSERT INTO backup_email_settings (enabled, email, frequency, categories, updated_by) 
+         VALUES ($1, $2, $3, $4, $5)`,
+        [enabled, email, frequency, JSON.stringify(categories || ['orders', 'customers', 'payments']), req.user?.email]
       );
     }
     
     res.json({ 
       message: 'Email backup settings saved successfully',
-      settings: { enabled, email, frequency }
+      settings: { enabled, email, frequency, categories }
     });
   } catch (error) {
     console.error('Save email backup settings error:', error);
@@ -241,6 +252,7 @@ export const getEmailBackupSettings = async (req: AuthRequest, res: Response) =>
         enabled BOOLEAN DEFAULT false,
         email VARCHAR(255),
         frequency VARCHAR(50),
+        categories JSONB DEFAULT '["orders", "customers", "payments"]'::jsonb,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_by VARCHAR(255)
       )
@@ -251,7 +263,12 @@ export const getEmailBackupSettings = async (req: AuthRequest, res: Response) =>
     if (result.rows.length > 0) {
       res.json(result.rows[0]);
     } else {
-      res.json({ enabled: false, email: '', frequency: 'weekly' });
+      res.json({ 
+        enabled: false, 
+        email: '', 
+        frequency: 'daily',
+        categories: ['orders', 'customers', 'payments']
+      });
     }
   } catch (error) {
     console.error('Get email backup settings error:', error);
@@ -281,36 +298,6 @@ export const sendDailyBackupEmail = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error('Send daily backup email error:', error);
     res.status(500).json({ error: 'Failed to send daily backup email' });
-  }
-};
-
-/**
- * Send test email to verify configuration
- */
-export const sendTestBackupEmail = async (req: AuthRequest, res: Response) => {
-  try {
-    const { email } = req.body;
-    
-    if (!email) {
-      return res.status(400).json({ error: 'Email address is required' });
-    }
-    
-    const result = await emailBackupService.sendTestEmail(email);
-    
-    if (result.success) {
-      res.json({
-        success: true,
-        message: result.message,
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: result.message,
-      });
-    }
-  } catch (error) {
-    console.error('Send test backup email error:', error);
-    res.status(500).json({ error: 'Failed to send test email' });
   }
 };
 

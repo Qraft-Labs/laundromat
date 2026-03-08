@@ -22,11 +22,30 @@ export default function CreateAccount() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [passwordErrors, setPasswordErrors] = useState<string[]>([]);
+  const [emailError, setEmailError] = useState('');
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setEmailError('');
+
+    // Validate email format strictly
+    const emailRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(formData.email)) {
+      setEmailError('Please enter a valid email address');
+      setError('Please enter a valid email address');
+      return;
+    }
+
+    // Check for disposable/temporary email domains
+    const disposableDomains = ['tempmail', 'throwaway', '10minute', 'guerrillamail', 'mailinator', 'yopmail', 'trashmail'];
+    const emailDomain = formData.email.split('@')[1]?.toLowerCase();
+    if (disposableDomains.some(d => emailDomain?.includes(d))) {
+      setEmailError('Disposable email addresses are not allowed');
+      setError('Please use a permanent email address (Gmail, Outlook, or company email)');
+      return;
+    }
 
     // Validate password strength
     const passwordValidation = validatePassword(formData.password);
@@ -54,7 +73,7 @@ export default function CreateAccount() {
           full_name: formData.fullName,
           email: formData.email,
           password: formData.password,
-          role: 'USER' // Cashiers only
+          // Role will be assigned by administrator during approval
         }),
       });
 
@@ -85,6 +104,27 @@ export default function CreateAccount() {
       setPasswordErrors([]);
       setError('');
     }
+    
+    // Real-time email validation
+    if (field === 'email') {
+      setEmailError('');
+      setError('');
+      
+      if (value) {
+        // Basic email format check
+        const emailRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+        if (!emailRegex.test(value)) {
+          setEmailError('Please enter a valid email format');
+        } else {
+          // Check for disposable email domains
+          const disposableDomains = ['tempmail', 'throwaway', '10minute', 'guerrillamail', 'mailinator', 'yopmail'];
+          const domain = value.split('@')[1]?.toLowerCase();
+          if (disposableDomains.some(d => domain?.includes(d))) {
+            setEmailError('Disposable emails not allowed. Use Gmail, Outlook, or company email');
+          }
+        }
+      }
+    }
   };
 
   if (success) {
@@ -96,9 +136,11 @@ export default function CreateAccount() {
               <CheckCircle2 className="h-10 w-10 text-green-600 dark:text-green-400" />
             </div>
             <h2 className="text-2xl font-bold mb-3">Account Request Submitted!</h2>
-            <p className="text-muted-foreground mb-6">
+            <p className="text-muted-foreground mb-4">
               Your account has been created and is pending approval from an administrator.
-              You will be notified once your account is approved and you'll receive your login credentials.
+            </p>
+            <p className="text-muted-foreground mb-6">
+              The administrator will review your request, approve your account, and assign you an appropriate role (Administrator, Manager, or Desktop Agent) based on your responsibilities.
             </p>
             <p className="text-sm text-muted-foreground">
               Redirecting to login page...
@@ -136,9 +178,9 @@ export default function CreateAccount() {
         {/* Create Account Card */}
         <Card className="shadow-2xl border-2 animate-in fade-in slide-in-from-bottom duration-700 delay-300">
           <CardHeader className="space-y-1 pb-6">
-            <CardTitle className="text-2xl font-bold text-center">Create Cashier Account</CardTitle>
+            <CardTitle className="text-2xl font-bold text-center">Create Account</CardTitle>
             <CardDescription className="text-center">
-              Request access to the Lush Laundry system
+              Request access to the Lush Laundry system. An administrator will review and approve your account.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -173,14 +215,23 @@ export default function CreateAccount() {
                   <Input
                     id="email"
                     type="email"
-                    placeholder="your@email.com"
+                    placeholder="yourname@gmail.com"
                     value={formData.email}
                     onChange={(e) => handleChange('email', e.target.value)}
-                    className="pl-10 h-11"
+                    className={`pl-10 h-11 ${emailError ? 'border-red-500' : ''}`}
                     required
                     disabled={loading}
                   />
                 </div>
+                {emailError && (
+                  <p className="text-xs text-red-500 flex items-center gap-1">
+                    <span>⚠️</span>
+                    {emailError}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Use a valid email (Gmail, Outlook, or company email). You'll receive approval notifications here.
+                </p>
               </div>
 
               <div className="space-y-2">

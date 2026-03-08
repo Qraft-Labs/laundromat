@@ -17,6 +17,7 @@ import { cleanupOldReceipts } from './services/pdf.service';
 import { dailyBackupScheduler } from './services/daily-backup.scheduler';
 import path from 'path';
 import dns from 'dns';
+import { ensureDirectories } from './utils/ensureDirectories';
 
 // Fix Windows DNS/Proxy issues for Google OAuth
 // Force IPv4 DNS resolution (Windows IPv6 can cause ENOTFOUND errors)
@@ -128,6 +129,9 @@ app.use(errorHandler);
 // Start server
 const startServer = async () => {
   try {
+    // Ensure upload directories exist
+    ensureDirectories();
+    
     app.listen(config.port, '0.0.0.0', () => {
       console.log('');
       console.log('🚀 ========================================');
@@ -139,11 +143,14 @@ const startServer = async () => {
       console.log('🚀 ========================================');
       console.log('');
       
-      // Initialize automated backup scheduler
-      initializeBackupScheduler();
-      
-      // Initialize daily email backup scheduler
-      dailyBackupScheduler.start();
+      // Initialize automated backup schedulers (disabled in development due to Supabase timeout issues)
+      if (config.nodeEnv === 'production') {
+        initializeBackupScheduler();
+        dailyBackupScheduler.start();
+        console.log('✅ Backup schedulers initialized');
+      } else {
+        console.log('⏸️  Backup schedulers disabled in development mode');
+      }
       
       // Schedule PDF receipt cleanup (every 24 hours)
       setInterval(() => {

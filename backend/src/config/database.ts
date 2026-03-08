@@ -9,7 +9,11 @@ const pool = new Pool({
   password: config.database.password,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 10000, // 10 seconds (increased from 2s for image uploads)
+  statement_timeout: 30000, // 30 seconds for queries
+  ssl: config.database.host.includes('supabase.com') 
+    ? { rejectUnauthorized: false } // Enable SSL for Supabase
+    : false, // Disable SSL for localhost
 });
 
 // Test connection
@@ -17,9 +21,11 @@ pool.on('connect', () => {
   console.log('✅ Database connected successfully');
 });
 
+// Handle connection errors gracefully without crashing the server
 pool.on('error', (err) => {
   console.error('❌ Unexpected database error:', err);
-  process.exit(-1);
+  console.error('⚠️ Database connection lost. Pool will attempt to reconnect...');
+  // Don't exit the process - let the pool handle reconnection
 });
 
 export const query = async (text: string, params?: any[]) => {

@@ -102,11 +102,12 @@ export const getPendingUsers = async (req: AuthRequest, res: Response) => {
 export const approveUser = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.params;
+    const { role } = req.body; // Optional role to assign during approval
     const adminId = req.user?.id;
     
     // Check if user exists and is pending
     const userCheck = await query(
-      'SELECT id, email, full_name, status FROM users WHERE id = $1',
+      'SELECT id, email, full_name, status, role FROM users WHERE id = $1',
       [userId]
     );
     
@@ -120,13 +121,21 @@ export const approveUser = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'User is not awaiting approval' });
     }
     
-    // Approve user
+    // Determine role to assign (use provided role or keep current)
+    const assignedRole = role || user.role;
+    
+    // Validate role if provided
+    if (role && !['ADMIN', 'MANAGER', 'DESKTOP_AGENT'].includes(role)) {
+      return res.status(400).json({ error: 'Invalid role specified' });
+    }
+    
+    // Approve user and assign role
     const result = await query(
       `UPDATE users 
-       SET status = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2
+       SET status = $1, role = $2, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3
        RETURNING id, email, full_name, role, status`,
-      [UserStatus.ACTIVE, userId]
+      [UserStatus.ACTIVE, assignedRole, userId]
     );
 
     const approvedUser = result.rows[0];

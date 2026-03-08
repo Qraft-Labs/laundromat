@@ -156,6 +156,7 @@ const UserManagement = () => {
   
   // Form states
   const [rejectionReason, setRejectionReason] = useState('');
+  const [selectedRoleForApproval, setSelectedRoleForApproval] = useState<'ADMIN' | 'MANAGER' | 'DESKTOP_AGENT'>('DESKTOP_AGENT');
   const [suspensionReason, setSuspensionReason] = useState('');
   const [newRole, setNewRole] = useState<string>('');
   const [temporaryPassword, setTemporaryPassword] = useState<string>('');
@@ -266,17 +267,18 @@ const UserManagement = () => {
     try {
       await axios.put(
         `${API_BASE_URL}/admin/users/${selectedUser.id}/approve`,
-        {},
+        { role: selectedRoleForApproval }, // Send selected role
         { headers: { Authorization: `Bearer ${token}` } }
       );
       
       toast({
         title: 'Success',
-        description: 'User approved successfully',
+        description: `User approved successfully with ${selectedRoleForApproval} role`,
       });
       
       setShowApproveDialog(false);
       setSelectedUser(null);
+      setSelectedRoleForApproval('DESKTOP_AGENT'); // Reset to default
       fetchUsers();
       fetchStatistics();
       fetchActivityLogs();
@@ -1166,14 +1168,51 @@ const UserManagement = () => {
             <DialogHeader>
               <DialogTitle>Approve User</DialogTitle>
               <DialogDescription>
-                Are you sure you want to approve this user? They will be able to access the system.
+                Select the appropriate role for this user based on their responsibilities.
               </DialogDescription>
             </DialogHeader>
             {selectedUser && (
-              <div className="space-y-2 py-4">
-                <p><strong>Name:</strong> {selectedUser.full_name}</p>
-                <p><strong>Email:</strong> {selectedUser.email}</p>
-                <p><strong>Role:</strong> {selectedUser.role}</p>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <p><strong>Name:</strong> {selectedUser.full_name}</p>
+                  <p><strong>Email:</strong> {selectedUser.email}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="role-select" className="text-sm font-medium">
+                    Assign Role
+                  </Label>
+                  <Select 
+                    value={selectedRoleForApproval} 
+                    onValueChange={(value) => setSelectedRoleForApproval(value as 'ADMIN' | 'MANAGER' | 'DESKTOP_AGENT')}
+                  >
+                    <SelectTrigger id="role-select" className="w-full">
+                      <SelectValue placeholder="Select a role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ADMIN">
+                        <div className="flex flex-col">
+                          <span className="font-medium">Administrator</span>
+                          <span className="text-xs text-muted-foreground">Full system access & user management</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="MANAGER">
+                        <div className="flex flex-col">
+                          <span className="font-medium">Manager</span>
+                          <span className="text-xs text-muted-foreground">Reports, approvals & team oversight</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="DESKTOP_AGENT">
+                        <div className="flex flex-col">
+                          <span className="font-medium">Desktop Agent</span>
+                          <span className="text-xs text-muted-foreground">Order processing & customer service</span>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Choose the role that best matches this user's job functions.
+                  </p>
+                </div>
               </div>
             )}
             <DialogFooter className="flex-col sm:flex-row gap-2">
@@ -1181,7 +1220,7 @@ const UserManagement = () => {
                 Cancel
               </Button>
               <Button onClick={handleApproveUser} className="bg-green-600 hover:bg-green-700 w-full sm:w-auto">
-                Approve
+                Approve with Selected Role
               </Button>
             </DialogFooter>
           </DialogContent>
