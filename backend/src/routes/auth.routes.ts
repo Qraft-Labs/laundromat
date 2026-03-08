@@ -33,7 +33,7 @@ router.get('/google/callback',
   }),
   (req: Request, res: Response) => {
     try {
-      const user = req.user as any;
+      const user = (req as any).user;
       
       if (!user) {
         return res.redirect(`${process.env.FRONTEND_URL}/login?error=no_user`);
